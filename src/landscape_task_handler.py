@@ -16,18 +16,11 @@ logger = logging.getLogger(__name__)
 TASK_HANDLER_SNAP_NAME = "landscape-task-handler"
 DEFAULT_SNAP_CHANNEL = "latest/edge"
 
-# The snap runs two long-lived services that must be restarted after a config change.
 TASK_HANDLER_SERVICES = ("server", "worker")
 
-# Prefixes for the four database sections the snap reads from its config.
-# See landscape-task-handler-charm-plan.md for the mapping of relation data to
-# these snap configuration keys.
 _STORES_DB_PREFIXES = ("main", "account", "resource")
 _TASK_DB_PREFIX = "task-handler"
 
-# mTLS / gRPC. The snap reads its server certificate material from a directory
-# that defaults to $SNAP_COMMON/certs/active. In a Juju deployment the charm
-# writes the certs supplied by a tls-certificates provider into that directory.
 SNAP_COMMON = Path(f"/var/snap/{TASK_HANDLER_SNAP_NAME}/common")
 CERTS_ACTIVE_DIR = SNAP_COMMON / "certs" / "active"
 CA_CERT_FILE = "ca.crt"
