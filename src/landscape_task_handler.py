@@ -23,9 +23,13 @@ _TASK_DB_PREFIX = "task-handler"
 
 SNAP_COMMON = Path(f"/var/snap/{TASK_HANDLER_SNAP_NAME}/common")
 CERTS_ACTIVE_DIR = SNAP_COMMON / "certs" / "active"
+CUSTOM_CERTS_DIR = SNAP_COMMON / "custom-certs"
 CA_CERT_FILE = "ca.crt"
 SERVER_CERT_FILE = "server.crt"
 SERVER_KEY_FILE = "server.key"
+CLIENT_CERT_FILE = "client.crt"
+CLIENT_KEY_FILE = "client.key"
+CERT_RENEWER_SERVICE = "cert-renewer"
 DEFAULT_GRPC_PORT = "50051"
 
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
@@ -165,18 +169,50 @@ def _database_section(
     return section
 
 
-def write_server_certificates(ca: str, certificate: str, private_key: str) -> None:
-    """Write the gRPC server certificate material into the snap's active certs dir.
+def write_custom_certificates(
+    ca: str,
+    server_cert: str,
+    server_key: str,
+    client_cert: str,
+    client_key: str,
+) -> None:
+    """Provision the operator-managed mTLS material for the task-handler snap.
 
-    The snap reads these files fresh on every TLS handshake, so writing new
-    files here rotates the certificate without a restart. Writes are atomic
-    (write to a temp file, then ``os.replace``) so a concurrent handshake never
-    observes a partial file.
+    The snap treats certificates placed in ``custom-certs`` as operator-provided
+    ("custom") material: its cert-manager validates them, copies them into the
+    active tree, and writes a sentinel that disables auto-rotation so the snap
+    never regenerates over the charm-issued certificates. Writing straight into
+    the active tree would instead look like auto-generated material and get
+    clobbered by the snap's self-signed rotation.
+
+    All five files (CA, server and client certificate/key) are required for the
+    snap to adopt the bundle, and the server and client certificates must chain
+    to the same CA. Writes are atomic (temp file + ``os.replace``) so a
+    concurrent read never observes a partial file. After writing, the snap's
+    cert-manager is run so the new material is adopted immediately instead of
+    waiting for the next restart or the daily rotation timer.
     """
-    CERTS_ACTIVE_DIR.mkdir(parents=True, exist_ok=True)
-    _atomic_write(CERTS_ACTIVE_DIR / CA_CERT_FILE, ca, 0o644)
-    _atomic_write(CERTS_ACTIVE_DIR / SERVER_CERT_FILE, certificate, 0o644)
-    _atomic_write(CERTS_ACTIVE_DIR / SERVER_KEY_FILE, private_key, 0o600)
+    CUSTOM_CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    _atomic_write(CUSTOM_CERTS_DIR / CA_CERT_FILE, ca, 0o644)
+    _atomic_write(CUSTOM_CERTS_DIR / SERVER_CERT_FILE, server_cert, 0o644)
+    _atomic_write(CUSTOM_CERTS_DIR / SERVER_KEY_FILE, server_key, 0o600)
+    _atomic_write(CUSTOM_CERTS_DIR / CLIENT_CERT_FILE, client_cert, 0o644)
+    _atomic_write(CUSTOM_CERTS_DIR / CLIENT_KEY_FILE, client_key, 0o600)
+    _adopt_custom_certificates()
+
+
+def _adopt_custom_certificates() -> None:
+    """Run the snap's cert-manager so it adopts the custom certificates.
+
+    The cert-manager runs as the ``cert-renewer`` one-shot service; starting it
+    triggers an immediate, idempotent reconcile that adopts any valid custom
+    certificates into the active tree without restarting the gRPC server (which
+    reloads its certificate material on every handshake).
+    """
+    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
+    if not task_handler_snap.present:
+        raise snap.SnapNotFoundError(TASK_HANDLER_SNAP_NAME)
+    task_handler_snap.start(services=[CERT_RENEWER_SERVICE])
 
 
 def configure_grpc(host: str, port: str = DEFAULT_GRPC_PORT, certs_dir: str | None = None) -> None:

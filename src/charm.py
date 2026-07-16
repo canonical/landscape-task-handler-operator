@@ -71,6 +71,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             relationship_name=CERTIFICATES_RELATION,
             certificate_requests=self._certificate_requests(),
             mode=Mode.UNIT,
+            refresh_events=[self.on.update_status],
         )
 
         framework.observe(self.on.install, self._on_install)
@@ -282,26 +283,39 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         return True
 
     def _apply_grpc_certificates(self) -> bool:
-        """Write the issued gRPC server certificate and point the snap at it.
+        """Provision the gRPC mTLS certificates and point the snap at them.
 
-        Writing the files is enough to rotate the certificate (the snap reloads
-        cert material on every handshake). The gRPC listen host and certs dir are
-        only written to snap config the first time, so a rotation does not
-        restart the workload. Returns False (and sets BlockedStatus) on failure.
+        The server certificate and the outbox client certificate are requested
+        from the same provider (so they share a CA) and handed to the snap as
+        operator-provided "custom" material. The snap adopts them into its active
+        tree and stops auto-rotating, so it never clobbers the charm-issued
+        certificates. Adopting new files rotates the certificate without a
+        restart. Returns False (and sets BlockedStatus) on failure.
         """
-        provider_certificate, private_key = self.certificates.get_assigned_certificate(
+        server_certificate, server_key = self.certificates.get_assigned_certificate(
             certificate_request=self._server_certificate_request()
         )
+        client_certificate, client_key = self.certificates.get_assigned_certificate(
+            certificate_request=self._client_certificate_request()
+        )
         host = self._routable_address()
-        if provider_certificate is None or private_key is None or host is None:
-            logger.info("gRPC server certificate or routable address is not available yet")
+        if (
+            server_certificate is None
+            or server_key is None
+            or client_certificate is None
+            or client_key is None
+            or host is None
+        ):
+            logger.info("gRPC certificates or routable address are not available yet")
             return True
         self.unit.status = ops.MaintenanceStatus("Configuring gRPC certificates...")
         try:
-            landscape_task_handler.write_server_certificates(
-                ca=str(provider_certificate.ca),
-                certificate=str(provider_certificate.certificate),
-                private_key=str(private_key),
+            landscape_task_handler.write_custom_certificates(
+                ca=str(server_certificate.ca),
+                server_cert=str(server_certificate.certificate),
+                server_key=str(server_key),
+                client_cert=str(client_certificate.certificate),
+                client_key=str(client_key),
             )
             landscape_task_handler.configure_grpc(host=host)
         except (snap.SnapError, snap.SnapNotFoundError, OSError):

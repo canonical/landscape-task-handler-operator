@@ -185,20 +185,49 @@ class TestStatus:
 
 
 class TestGrpcCertificates:
-    def test_write_server_certificates(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
-        """Cert material is written to the active dir with a private key locked to 0600."""
-        active_dir = tmp_path / "active"
-        monkeypatch.setattr(landscape_task_handler, "CERTS_ACTIVE_DIR", active_dir)
+    def test_write_custom_certificates(
+        self, tmp_path, mock_snap: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The full mTLS bundle is written to custom-certs with keys locked to 0600."""
+        custom_dir = tmp_path / "custom-certs"
+        monkeypatch.setattr(landscape_task_handler, "CUSTOM_CERTS_DIR", custom_dir)
+        mock_snap.present = True
 
-        landscape_task_handler.write_server_certificates(
-            ca="CA-PEM", certificate="SERVER-PEM", private_key="KEY-PEM"
+        landscape_task_handler.write_custom_certificates(
+            ca="CA-PEM",
+            server_cert="SERVER-PEM",
+            server_key="SERVER-KEY-PEM",
+            client_cert="CLIENT-PEM",
+            client_key="CLIENT-KEY-PEM",
         )
 
-        assert (active_dir / "ca.crt").read_text() == "CA-PEM"
-        assert (active_dir / "server.crt").read_text() == "SERVER-PEM"
-        key = active_dir / "server.key"
-        assert key.read_text() == "KEY-PEM"
-        assert (key.stat().st_mode & 0o777) == 0o600
+        assert (custom_dir / "ca.crt").read_text() == "CA-PEM"
+        assert (custom_dir / "server.crt").read_text() == "SERVER-PEM"
+        assert (custom_dir / "client.crt").read_text() == "CLIENT-PEM"
+        server_key = custom_dir / "server.key"
+        client_key = custom_dir / "client.key"
+        assert server_key.read_text() == "SERVER-KEY-PEM"
+        assert client_key.read_text() == "CLIENT-KEY-PEM"
+        assert (server_key.stat().st_mode & 0o777) == 0o600
+        assert (client_key.stat().st_mode & 0o777) == 0o600
+        # The snap's cert-manager is run so the material is adopted immediately.
+        mock_snap.start.assert_called_once_with(services=["cert-renewer"])
+
+    def test_write_custom_certificates_requires_installed_snap(
+        self, tmp_path, mock_snap: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Adoption fails loudly if the snap is not installed."""
+        monkeypatch.setattr(landscape_task_handler, "CUSTOM_CERTS_DIR", tmp_path / "custom-certs")
+        mock_snap.present = False
+
+        with pytest.raises(snap.SnapNotFoundError):
+            landscape_task_handler.write_custom_certificates(
+                ca="CA-PEM",
+                server_cert="SERVER-PEM",
+                server_key="SERVER-KEY-PEM",
+                client_cert="CLIENT-PEM",
+                client_key="CLIENT-KEY-PEM",
+            )
 
     def test_configure_grpc_sets_host_and_restarts(self, mock_snap: MagicMock):
         """The initial gRPC config sets the listen host + certs dir and restarts once."""
@@ -598,7 +627,7 @@ class TestGrpcCertificatesReconcile:
                 _FakePem("KEY-PEM"),
             ),
         )
-        monkeypatch.setattr("landscape_task_handler.write_server_certificates", write_mock)
+        monkeypatch.setattr("landscape_task_handler.write_custom_certificates", write_mock)
 
     def test_certificate_configured(self, mock_snap: MagicMock, monkeypatch: pytest.MonkeyPatch):
         """When a certificate is available the server certs are written and grpc configured."""
