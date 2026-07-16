@@ -573,6 +573,30 @@ class TestStatusEvaluation:
         assert isinstance(state_out.unit_status, testing.WaitingStatus)
         assert "database configuration" in state_out.unit_status.message
 
+    def test_blocked_when_snap_not_installed(self, mock_snap: MagicMock):
+        """A missing workload snap is surfaced as Blocked, not masked as waiting."""
+        mock_snap.present = False
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        state_out = ctx.run(ctx.on.update_status(), testing.State())
+
+        assert state_out.unit_status == testing.BlockedStatus("task-handler snap is not installed")
+
+    def test_blocked_when_snap_query_fails(self, monkeypatch: pytest.MonkeyPatch):
+        """A snap error while querying installation state blocks the unit."""
+
+        def _raise() -> bool:
+            raise snap.SnapError("boom")
+
+        monkeypatch.setattr("landscape_task_handler.is_installed", _raise)
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+        relation = _stores_relation()
+        state_in = testing.State(relations={relation})
+
+        state_out = ctx.run(ctx.on.relation_broken(relation), state_in)
+
+        assert state_out.unit_status == testing.BlockedStatus("Failed to query task-handler snap")
+
 
 class TestStoresPassword:
     def test_no_secret_id_skips(self, mock_snap: MagicMock):

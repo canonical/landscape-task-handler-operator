@@ -378,8 +378,6 @@ dependencies = [
     { name = "cryptography" },
     { name = "ops" },
     { name = "pydantic" },
-    { name = "tox" },
-    { name = "tox-uv" },
     { name = "validators" },
 ]
 
@@ -391,6 +389,8 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "tox" },
+    { name = "tox-uv" },
 ]
 integration = [
     { name = "jubilant" },
@@ -414,15 +414,17 @@ requires-dist = [
     { name = "cryptography", specifier = ">=43.0.0" },
     { name = "ops", specifier = ">=3,<4" },
     { name = "pydantic", specifier = ">=2" },
-    { name = "tox", specifier = ">=4.47.0" },
-    { name = "tox-uv", specifier = ">=1.33.1" },
     { name = "tox-uv", marker = "extra == 'dev'" },
     { name = "validators" },
 ]
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4.1" }]
+dev = [
+    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "tox", specifier = ">=4.47.0" },
+    { name = "tox-uv", specifier = ">=1.33.1" },
+]
 integration = [
     { name = "jubilant" },
     { name = "pytest" },

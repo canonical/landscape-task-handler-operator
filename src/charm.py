@@ -597,8 +597,20 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         The unit only reports Active once the workload snap actually holds the
         database configuration, not merely because the relations exist. This
         avoids reporting Active while the snap is unconfigured (for example after
-        a charm refresh that has not yet re-applied the relation data).
+        a charm refresh that has not yet re-applied the relation data). A missing
+        workload snap is surfaced as Blocked so a broken install is not masked as
+        merely waiting for configuration.
         """
+        try:
+            installed = landscape_task_handler.is_installed()
+        except (snap.SnapError, snap.SnapNotFoundError):
+            logger.exception("failed to query task-handler snap state")
+            self.unit.status = ops.BlockedStatus("Failed to query task-handler snap")
+            return
+        if not installed:
+            self.unit.status = ops.BlockedStatus("task-handler snap is not installed")
+            return
+
         missing = [
             name
             for name in (LANDSCAPE_SERVER_RELATION, TASK_DB_RELATION)

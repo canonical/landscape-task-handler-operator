@@ -234,10 +234,16 @@ def configure_grpc(host: str, port: str = DEFAULT_GRPC_PORT, certs_dir: str | No
 
 
 def _atomic_write(path: Path, content: str, mode: int) -> None:
-    """Atomically write ``content`` to ``path`` with the given permission bits."""
+    """Atomically write ``content`` to ``path`` with the given permission bits.
+
+    The temporary file is created with the intended permissions up-front (via
+    ``os.open`` with ``mode``) so a private key is never briefly readable with
+    broader, umask-derived permissions before a ``chmod``.
+    """
     tmp_path = path.with_name(f".{path.name}.tmp")
-    tmp_path.write_text(content)
-    os.chmod(tmp_path, mode)
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as tmp_file:
+        tmp_file.write(content)
     os.replace(tmp_path, path)
 
 
