@@ -200,6 +200,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         if landscape_task_handler.is_installed():
             applied &= self._apply_task_db_config()
             applied &= self._apply_stores_config()
+            applied &= self._apply_runtime_config()
             applied &= self._apply_grpc_certificates()
 
         if applied:
@@ -228,7 +229,12 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         """Apply the shared Landscape store DB config from the landscape-server relation.
 
         Fans the single stores block out into the main/account/resource snap DB
-        sections. Returns False (and sets BlockedStatus) only on snap failure.
+        sections. Returns False when the workload cannot be configured: either a
+        snap operation failed or a published stores password could not be
+        resolved. In both cases a BlockedStatus has already been set (here or by
+        ``_resolve_stores_password``). A missing relation, an incomplete databag,
+        or a not-yet-published stores secret is treated as nothing to do and
+        returns True.
         """
         relation = self.model.get_relation(LANDSCAPE_SERVER_RELATION)
         if relation is None or relation.app is None:
@@ -279,6 +285,22 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         except (snap.SnapError, snap.SnapNotFoundError):
             logger.exception("failed to configure Landscape stores")
             self.unit.status = ops.BlockedStatus("Failed to configure Landscape stores")
+            return False
+        return True
+
+    def _apply_runtime_config(self) -> bool:
+        """Apply the logging, worker and cleanup runtime settings from charm config.
+
+        These are plain charm configuration (not relation data), so they apply
+        whenever the snap is installed. Only options the operator has explicitly
+        set are pushed; unset options fall back to the snap's own defaults.
+        Returns False (and sets BlockedStatus) only when a snap operation fails.
+        """
+        try:
+            landscape_task_handler.configure_runtime(dict(self.config))
+        except (snap.SnapError, snap.SnapNotFoundError):
+            logger.exception("failed to apply runtime configuration")
+            self.unit.status = ops.BlockedStatus("Failed to apply runtime configuration")
             return False
         return True
 
@@ -352,8 +374,8 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         return host, port, username, password, database, ssl
 
     def _on_landscape_server_broken(self, event: ops.RelationBrokenEvent) -> None:
-        """Surface that the task-handler can no longer perform deletions."""
-        logger.info("landscape-server relation removed; task-handler cannot perform deletions")
+        """Surface that the task-handler can no longer process its tasks."""
+        logger.info("landscape-server relation removed; task-handler cannot process tasks")
         self._evaluate_status()
 
     def _on_certificate_available(self, event: CertificateAvailableEvent) -> None:

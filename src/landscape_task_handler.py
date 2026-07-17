@@ -6,6 +6,7 @@ The intention is that this module could be used outside the context of a charm.
 
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,10 @@ logger = logging.getLogger(__name__)
 TASK_HANDLER_SNAP_NAME = "landscape-task-handler"
 DEFAULT_SNAP_CHANNEL = "latest/edge"
 
-TASK_HANDLER_SERVICES = ("server", "worker")
+# The long-running (always-active) snap services. Other snap services (for
+# example the cleanup and cert-renewer services) are one-shot daemons that are
+# not expected to stay active, so they are excluded from health checks.
+TASK_HANDLER_ACTIVE_SERVICES = ("server", "worker")
 
 _STORES_DB_PREFIXES = ("main", "account", "resource")
 _TASK_DB_PREFIX = "task-handler"
@@ -33,6 +37,24 @@ CERT_RENEWER_SERVICE = "cert-renewer"
 DEFAULT_GRPC_PORT = "50051"
 
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
+
+# Maps charm config option names to the snap config keys read by the workload's
+# start scripts. Covers the shared logging settings (server, worker and cleanup),
+# the worker (landscape.worker.*) and the cleanup service (landscape.cleanup.*).
+_RUNTIME_KEY_MAP = {
+    "log-level": "landscape.logging.level",
+    "log-human-readable": "landscape.logging.human-readable",
+    "worker-sleep": "landscape.worker.sleep",
+    "worker-max-retries": "landscape.worker.max-retries",
+    "worker-batch-size": "landscape.worker.batch-size",
+    "worker-lease-duration": "landscape.worker.lease-duration",
+    "worker-lease-reset-interval": "landscape.worker.lease-reset-interval",
+    "worker-concurrency": "landscape.worker.concurrency",
+    "worker-conn-max-lifetime": "landscape.worker.conn-max-lifetime",
+    "cleanup-failed-retention-duration": "landscape.cleanup.failed-retention-duration",
+    "cleanup-batch-size": "landscape.cleanup.batch-size",
+    "cleanup-batch-sleep": "landscape.cleanup.batch-sleep",
+}
 
 
 def install(channel: str = DEFAULT_SNAP_CHANNEL) -> None:
@@ -86,14 +108,17 @@ def configure_task_db(
 ) -> None:
     """Set the task-handler's own database connection parameters in the snap.
 
-    This is the database that owns the ``deletion_task`` queue table. The snap
-    auto-creates the table on startup; the database and login role must already
-    exist.
+    This is the database that owns the task-handler's own task queue table(s).
+    The snap auto-creates the tables on startup; the database and login role
+    must already exist.
+
+    Setting snap config is enough to apply it: the snap's ``configure`` hook
+    restarts the affected services, so the charm must not restart the snap here
+    (doing so would cause redundant, back-to-back restarts).
     """
     task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
     config = _database_section(_TASK_DB_PREFIX, host, port, user, password, database, ssl)
-    if _set_snap_config_if_changed(task_handler_snap, config):
-        restart()
+    _set_snap_config_if_changed(task_handler_snap, config)
 
 
 def configure_stores(
@@ -134,8 +159,41 @@ def configure_stores(
             )
         )
 
-    if _set_snap_config_if_changed(task_handler_snap, config):
-        restart()
+    _set_snap_config_if_changed(task_handler_snap, config)
+
+
+def configure_runtime(options: Mapping[str, Any]) -> None:
+    """Apply the logging, worker and cleanup runtime settings to the snap.
+
+    ``options`` is the charm's config mapping; only the keys in
+    ``_RUNTIME_KEY_MAP`` are consumed and the rest are ignored. Options that are
+    unset (absent, ``None`` or empty) are left untouched so the snap's own
+    defaults apply. The logging settings are shared by the server, worker and
+    cleanup services; the worker and cleanup settings are read by their
+    respective services. Only writes snap config when a value actually changes,
+    so unrelated events do not trigger a restart.
+    """
+    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
+    config: dict[str, str] = {}
+    for option, snap_key in _RUNTIME_KEY_MAP.items():
+        value = options.get(option)
+        if value is None or value == "":
+            continue
+        config[snap_key] = _to_snap_value(value)
+
+    if config:
+        _set_snap_config_if_changed(task_handler_snap, config)
+
+
+def _to_snap_value(value: Any) -> str:
+    """Render a charm config value as the string the snap expects.
+
+    Booleans become lowercase ``true``/``false`` (matching the snap's boolean
+    parsing); everything else is stringified as-is.
+    """
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
 
 
 def _database_section(
@@ -229,8 +287,7 @@ def configure_grpc(host: str, port: str = DEFAULT_GRPC_PORT, certs_dir: str | No
         "landscape.task-handler.grpc-port": port,
         "landscape.task-handler.grpc-certs-dir": certs_dir or str(CERTS_ACTIVE_DIR),
     }
-    if _set_snap_config_if_changed(task_handler_snap, config):
-        restart()
+    _set_snap_config_if_changed(task_handler_snap, config)
 
 
 def _atomic_write(path: Path, content: str, mode: int) -> None:
@@ -287,7 +344,7 @@ def check_health() -> dict[str, bool | str]:
 
     inactive = [
         name
-        for name in TASK_HANDLER_SERVICES
+        for name in TASK_HANDLER_ACTIVE_SERVICES
         if not (services.get(name) and services[name]["active"])
     ]
     healthy = installed and not inactive
@@ -318,8 +375,10 @@ def _redact_config(config: dict[str, Any]) -> dict[str, Any]:
 def _set_snap_config_if_changed(task_handler_snap: snap.Snap, config: dict[str, str]) -> bool:
     """Set snap config keys that differ from their desired value.
 
-    Returns True if any keys were changed, so the caller can decide whether a
-    restart is required.
+    Returns True if any keys were changed. Callers do not need to restart the
+    snap: any ``snap set`` fires the snap's ``configure`` hook, which restarts
+    the affected services. Skipping unchanged keys avoids firing that hook (and
+    the restart) when nothing actually changed.
 
     The current configuration is fetched in a single ``snap get`` call. A
     per-key ``snap get`` raises ``SnapError`` for keys that are not yet set (as

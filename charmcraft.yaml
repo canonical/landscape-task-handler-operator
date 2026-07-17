@@ -11,9 +11,9 @@ description: |
 
   It installs and upgrades the landscape-task-handler snap, manages its
   configuration, and connects it to PostgreSQL. The task-handler owns its own
-  task database (for the deletion_task queue) and also consumes the shared
-  Landscape stores (main, account and resource databases) so that it can perform
-  computer deletion and failed-task pruning.
+  task database (for its task queue) and also consumes the shared
+  Landscape stores (main, account and resource databases) so that it can
+  process tasks on behalf of Landscape Server.
 
   This charm meets the need to run the task-handler as an integrated, hands-off
   part of a Juju-managed Landscape deployment. It is useful for Landscape
@@ -90,6 +90,75 @@ config:
         same Landscape hostname; in particular it must differ from the port used
         by landscape-server's ubuntu-installer-attach gRPC service (50051). The
         task-handler snap's own listen port stays 50051 (the haproxy backend).
+    log-level:
+      type: string
+      description: |
+        Log level for the task-handler services (server and worker) and the
+        cleanup service. One of: debug, info, warn, error, trace, fatal. When
+        unset, the snap default ("info") applies.
+    log-human-readable:
+      type: boolean
+      description: |
+        Emit human-readable console logs instead of structured JSON for the
+        task-handler services (server and worker) and the cleanup service. When
+        unset, the snap default (false, structured JSON) applies.
+    worker-sleep:
+      type: string
+      description: |
+        How long the worker sleeps between polls when no task is
+        available, as a Go duration (for example "5s", "500ms", "1m"). When
+        unset, the snap default ("5s") applies.
+    worker-max-retries:
+      type: int
+      description: |
+        Maximum number of times the worker retries a failed task before
+        marking it failed. Must be zero or greater. When unset, the worker
+        retries indefinitely (the snap default).
+    worker-batch-size:
+      type: int
+      description: |
+        Number of tasks the worker claims from the queue per batch.
+        Must be at least 1. When unset, the snap default (10) applies.
+    worker-lease-duration:
+      type: string
+      description: |
+        How long a worker holds a lease on a claimed task before it may
+        be reclaimed by another worker, as a Go duration (for example "2m").
+        When unset, the snap default ("2m") applies.
+    worker-lease-reset-interval:
+      type: string
+      description: |
+        How often the worker resets stale leases on abandoned tasks, as
+        a Go duration (for example "5m"). When unset, the snap default ("5m")
+        applies.
+    worker-concurrency:
+      type: int
+      description: |
+        Number of tasks the worker processes concurrently. Must be at
+        least 1. When unset, the snap default (4) applies.
+    worker-conn-max-lifetime:
+      type: string
+      description: |
+        Maximum lifetime of a worker database connection before it is recycled,
+        as a Go duration (for example "5m"). When unset, the snap default ("5m")
+        applies.
+    cleanup-failed-retention-duration:
+      type: string
+      description: |
+        How long failed tasks are retained before the cleanup service
+        prunes them, as a Go duration (for example "720h" for 30 days). Must be
+        greater than zero. When unset, the snap default ("720h") applies.
+    cleanup-batch-size:
+      type: int
+      description: |
+        Number of failed tasks the cleanup service prunes per batch.
+        Must be at least 1. When unset, the snap default (50) applies.
+    cleanup-batch-sleep:
+      type: string
+      description: |
+        How long the cleanup service sleeps between prune batches, as a Go
+        duration (for example "50ms"). Must be zero or greater. When unset, the
+        snap default ("50ms") applies.
 
 actions:
   show-config:

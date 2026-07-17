@@ -81,6 +81,29 @@ class TestInstallAndLifecycle:
 
         mock_snap.ensure.assert_called_once_with(snap.SnapState.Latest, channel="latest/edge")
 
+    def test_config_changed_applies_runtime_config(self, mock_snap: MagicMock):
+        """A runtime config change is pushed to the worker/logging/cleanup snap keys."""
+        mock_snap.present = True
+        mock_snap.revision = "45"
+        mock_snap.get.return_value = None
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        ctx.run(
+            ctx.on.config_changed(),
+            testing.State(
+                config={
+                    "log-level": "debug",
+                    "worker-concurrency": 8,
+                    "cleanup-batch-size": 100,
+                }
+            ),
+        )
+
+        set_config = mock_snap.set.call_args[0][0]
+        assert set_config["landscape.logging.level"] == "debug"
+        assert set_config["landscape.worker.concurrency"] == "8"
+        assert set_config["landscape.cleanup.batch-size"] == "100"
+
 
 class TestTaskDbRelation:
     def test_task_db_configures_snap(self, mock_snap: MagicMock):
@@ -114,7 +137,8 @@ class TestTaskDbRelation:
         assert set_config["landscape.database.task-handler.name"] == "task-handler"
         assert set_config["landscape.database.task-handler.user"] == "taskuser"
         assert set_config["landscape.database.task-handler.password"] == "taskpw"
-        mock_snap.restart.assert_called_once()
+        # The snap's configure hook restarts the services, so the charm must not.
+        mock_snap.restart.assert_not_called()
 
 
 class TestStoresRelation:
@@ -152,7 +176,8 @@ class TestStoresRelation:
             assert set_config[f"landscape.database.{prefix}.host"] == "db.example.com"
             assert set_config[f"landscape.database.{prefix}.password"] == "storespw"
             assert set_config[f"landscape.database.{prefix}.ssl"] == "require"
-        mock_snap.restart.assert_called_once()
+        # The snap's configure hook restarts the services, so the charm must not.
+        mock_snap.restart.assert_not_called()
 
     def test_stores_missing_fields_defers(self, mock_snap: MagicMock):
         """Incomplete stores databag defers without touching the snap."""
@@ -229,8 +254,12 @@ class TestGrpcCertificates:
                 client_key="CLIENT-KEY-PEM",
             )
 
-    def test_configure_grpc_sets_host_and_restarts(self, mock_snap: MagicMock):
-        """The initial gRPC config sets the listen host + certs dir and restarts once."""
+    def test_configure_grpc_sets_host(self, mock_snap: MagicMock):
+        """The initial gRPC config sets the listen host + certs dir without restarting.
+
+        The snap's configure hook restarts the affected services on any config
+        change, so the charm must not restart the snap itself.
+        """
         mock_snap.present = True
         mock_snap.get.return_value = None
 
@@ -242,7 +271,7 @@ class TestGrpcCertificates:
         assert cfg["landscape.task-handler.grpc-certs-dir"] == str(
             landscape_task_handler.CERTS_ACTIVE_DIR
         )
-        mock_snap.restart.assert_called_once()
+        mock_snap.restart.assert_not_called()
 
     def test_configure_grpc_unchanged_does_not_restart(self, mock_snap: MagicMock):
         """Rotation (same host/dir) must not re-set config or restart the snap."""
@@ -472,6 +501,19 @@ class TestLifecycleErrors:
         state_out = ctx.run(ctx.on.config_changed(), testing.State())
 
         assert state_out.unit_status == testing.BlockedStatus("Failed to apply configuration")
+
+    def test_runtime_config_snap_error_blocks(self, mock_snap: MagicMock):
+        """A snap failure while applying runtime config blocks the unit."""
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+        mock_snap.set.side_effect = snap.SnapError("boom")
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        state_out = ctx.run(ctx.on.config_changed(), testing.State(config={"log-level": "debug"}))
+
+        assert state_out.unit_status == testing.BlockedStatus(
+            "Failed to apply runtime configuration"
+        )
 
     def test_update_status_reconciles(self, mock_snap: MagicMock):
         """update-status reconciles and reports waiting when relations are missing."""
@@ -930,7 +972,7 @@ class TestModuleFunctions:
         mock_snap.get.side_effect = snap.SnapError("no config")
         landscape_task_handler.configure_task_db("h", "5432", "u", "p", "d", "disable")
         mock_snap.set.assert_called_once()
-        mock_snap.restart.assert_called_once()
+        mock_snap.restart.assert_not_called()
 
     def test_configure_grpc_with_certs_dir(self, mock_snap: MagicMock):
         mock_snap.present = True
@@ -1067,6 +1109,94 @@ class TestModuleFunctions:
         # ssl is stored as the bool True; desired "true" matches it, so nothing changes.
         landscape_task_handler.configure_task_db("h", "5432", "u", "p", "d", "true")
         mock_snap.set.assert_not_called()
+
+
+class TestConfigureRuntime:
+    def test_sets_worker_logging_and_cleanup_keys(self, mock_snap: MagicMock):
+        """Runtime config fans out into the worker, logging and cleanup snap keys."""
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+
+        landscape_task_handler.configure_runtime(
+            {
+                "log-level": "debug",
+                "log-human-readable": True,
+                "worker-sleep": "5s",
+                "worker-batch-size": 10,
+                "worker-lease-duration": "2m",
+                "worker-lease-reset-interval": "5m",
+                "worker-concurrency": 4,
+                "worker-conn-max-lifetime": "5m",
+                "cleanup-failed-retention-duration": "720h",
+                "cleanup-batch-size": 50,
+                "cleanup-batch-sleep": "50ms",
+            }
+        )
+
+        cfg = mock_snap.set.call_args[0][0]
+        assert cfg["landscape.logging.level"] == "debug"
+        assert cfg["landscape.logging.human-readable"] == "true"
+        assert cfg["landscape.worker.sleep"] == "5s"
+        assert cfg["landscape.worker.batch-size"] == "10"
+        assert cfg["landscape.worker.lease-duration"] == "2m"
+        assert cfg["landscape.worker.lease-reset-interval"] == "5m"
+        assert cfg["landscape.worker.concurrency"] == "4"
+        assert cfg["landscape.worker.conn-max-lifetime"] == "5m"
+        assert cfg["landscape.cleanup.failed-retention-duration"] == "720h"
+        assert cfg["landscape.cleanup.batch-size"] == "50"
+        assert cfg["landscape.cleanup.batch-sleep"] == "50ms"
+        # The snap's configure hook restarts the services, so the charm must not.
+        mock_snap.restart.assert_not_called()
+
+    def test_ignores_unset_and_unrelated_options(self, mock_snap: MagicMock):
+        """Absent, None and empty options are skipped; unrelated options are ignored."""
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+
+        landscape_task_handler.configure_runtime(
+            {
+                "log-level": "info",
+                "worker-max-retries": None,
+                "worker-sleep": "",
+                "task-handler-snap-channel": "latest/edge",
+            }
+        )
+
+        cfg = mock_snap.set.call_args[0][0]
+        assert cfg == {"landscape.logging.level": "info"}
+        assert "landscape.worker.max-retries" not in cfg
+        assert "landscape.worker.sleep" not in cfg
+
+    def test_max_retries_zero_is_applied(self, mock_snap: MagicMock):
+        """A worker-max-retries of 0 is a valid value and must be pushed."""
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+
+        landscape_task_handler.configure_runtime({"worker-max-retries": 0})
+
+        cfg = mock_snap.set.call_args[0][0]
+        assert cfg["landscape.worker.max-retries"] == "0"
+
+    def test_no_options_does_not_set_or_restart(self, mock_snap: MagicMock):
+        """An empty runtime config leaves the snap untouched."""
+        mock_snap.present = True
+
+        landscape_task_handler.configure_runtime({})
+
+        mock_snap.set.assert_not_called()
+        mock_snap.restart.assert_not_called()
+
+    def test_unchanged_values_do_not_restart(self, mock_snap: MagicMock):
+        """Re-applying identical runtime config must not re-set or restart."""
+        mock_snap.present = True
+        mock_snap.get.return_value = {
+            "landscape": {"logging": {"level": "info"}, "worker": {"concurrency": 4}}
+        }
+
+        landscape_task_handler.configure_runtime({"log-level": "info", "worker-concurrency": 4})
+
+        mock_snap.set.assert_not_called()
+        mock_snap.restart.assert_not_called()
 
 
 class TestHaproxyRouteBranches:
