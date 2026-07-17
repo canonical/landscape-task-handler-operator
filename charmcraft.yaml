@@ -1,0 +1,183 @@
+# This file configures Charmcraft.
+# See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/
+type: charm
+name: landscape-task-handler
+title: Landscape Task Handler Operator
+
+summary: Install, configure and operate the landscape-task-handler snap.
+description: |
+  The Landscape Task Handler Operator turns the landscape-task-handler snap into
+  a fully managed, deployable component of a Landscape Server environment.
+
+  It installs and upgrades the landscape-task-handler snap, manages its
+  configuration, and connects it to PostgreSQL. The task-handler owns its own
+  task database (for its task queue) and also consumes the shared
+  Landscape stores (main, account and resource databases) so that it can
+  process tasks on behalf of Landscape Server.
+
+  This charm meets the need to run the task-handler as an integrated, hands-off
+  part of a Juju-managed Landscape deployment. It is useful for Landscape
+  administrators and operators who deploy Landscape Server with Juju.
+
+links:
+  documentation: https://charmhub.io/landscape-task-handler
+  source:
+    - https://github.com/canonical/landscape-task-handler-operator
+  issues:
+    - https://github.com/canonical/landscape-task-handler-operator/issues
+  website:
+    - https://ubuntu.com/landscape
+  contact: https://launchpad.net/~landscape
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+  arm64:
+
+assumes:
+  - juju >= 3.6
+
+charm-libs:
+  - lib: data_platform_libs.data_interfaces
+    version: "0.58"
+  - lib: haproxy.haproxy_route_tcp
+    version: "1.6"
+
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
+    prime:
+      - "-.ruff_cache"
+      - "-.venv"
+      - "-.pytest_cache"
+
+# Relations consumed by the charm.
+# https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/
+requires:
+  task-db:
+    interface: postgresql_client
+    limit: 1
+  landscape-server:
+    interface: landscape-task-handler
+    limit: 1
+  certificates:
+    interface: tls-certificates
+    limit: 1
+  grpc-haproxy-route:
+    interface: haproxy-route-tcp
+    limit: 1
+
+config:
+  options:
+    task-handler-snap-channel:
+      default: "latest/stable"
+      type: string
+      description: |
+        The snap store channel used to install and refresh the
+        landscape-task-handler snap (for example "latest/stable" or
+        "latest/edge"). Changing this value refreshes the snap to the new
+        channel.
+    grpc-external-port:
+      default: 50053
+      type: int
+      description: |
+        The external port that the haproxy frontend listens on for the
+        task-handler's mTLS gRPC service, and the port the outbox is told to
+        dial. This must be unique across all haproxy-route services sharing the
+        same Landscape hostname; in particular it must differ from the port used
+        by landscape-server's ubuntu-installer-attach gRPC service (50051). The
+        task-handler snap's own listen port stays 50051 (the haproxy backend).
+    log-level:
+      type: string
+      description: |
+        Log level for the task-handler services (server and worker) and the
+        cleanup service. One of: debug, info, warn, error, trace, fatal. When
+        unset, the snap default ("info") applies.
+    log-human-readable:
+      type: boolean
+      description: |
+        Emit human-readable console logs instead of structured JSON for the
+        task-handler services (server and worker) and the cleanup service. When
+        unset, the snap default (false, structured JSON) applies.
+    worker-sleep:
+      type: string
+      description: |
+        How long the worker sleeps between polls when no task is
+        available, as a Go duration (for example "5s", "500ms", "1m"). When
+        unset, the snap default ("5s") applies.
+    worker-max-retries:
+      type: int
+      description: |
+        Maximum number of times the worker retries a failed task before
+        marking it failed. Must be zero or greater. When unset, the worker
+        retries indefinitely (the snap default).
+    worker-batch-size:
+      type: int
+      description: |
+        Number of tasks the worker claims from the queue per batch.
+        Must be at least 1. When unset, the snap default (10) applies.
+    worker-lease-duration:
+      type: string
+      description: |
+        How long a worker holds a lease on a claimed task before it may
+        be reclaimed by another worker, as a Go duration (for example "2m").
+        When unset, the snap default ("2m") applies.
+    worker-lease-reset-interval:
+      type: string
+      description: |
+        How often the worker resets stale leases on abandoned tasks, as
+        a Go duration (for example "5m"). When unset, the snap default ("5m")
+        applies.
+    worker-concurrency:
+      type: int
+      description: |
+        Number of tasks the worker processes concurrently. Must be at
+        least 1. When unset, the snap default (4) applies.
+    worker-conn-max-lifetime:
+      type: string
+      description: |
+        Maximum lifetime of a worker database connection before it is recycled,
+        as a Go duration (for example "5m"). When unset, the snap default ("5m")
+        applies.
+    cleanup-failed-retention-duration:
+      type: string
+      description: |
+        How long failed tasks are retained before the cleanup service
+        prunes them, as a Go duration (for example "720h" for 30 days). Must be
+        greater than zero. When unset, the snap default ("720h") applies.
+    cleanup-batch-size:
+      type: int
+      description: |
+        Number of failed tasks the cleanup service prunes per batch.
+        Must be at least 1. When unset, the snap default (50) applies.
+    cleanup-batch-sleep:
+      type: string
+      description: |
+        How long the cleanup service sleeps between prune batches, as a Go
+        duration (for example "50ms"). Must be zero or greater. When unset, the
+        snap default ("50ms") applies.
+
+actions:
+  show-config:
+    description: |
+      Display the landscape-task-handler snap configuration currently managed by
+      the charm. Sensitive values are redacted, so the output is safe to share
+      when reporting issues.
+  check-health:
+    description: |
+      Verify that the landscape-task-handler snap is installed and that its
+      services are active. Use this to confirm the unit is healthy after
+      deployment, configuration changes, or an upgrade.
+  show-version:
+    description: |
+      Report version information for the installed landscape-task-handler snap,
+      including the snap revision and channel. Useful when confirming an upgrade
+      or diagnosing version-specific behaviour.
+  restart-snap:
+    description: |
+      Restart the landscape-task-handler snap services. Use this to recover from
+      a transient fault or to force the services to re-read their runtime state.
+      Causes a brief service interruption while the services restart.
