@@ -40,17 +40,17 @@ SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
 
 # Maps charm config option names to the snap config keys read by the workload's
 # start scripts. Covers the shared logging settings (server, worker and cleanup),
-# the worker (landscape.worker.*) and the cleanup service (landscape.cleanup.*).
+# the worker (landscape.task-handler.worker.*) and the cleanup service (landscape.cleanup.*).
 _RUNTIME_KEY_MAP = {
     "log-level": "landscape.logging.level",
     "log-human-readable": "landscape.logging.human-readable",
-    "worker-sleep": "landscape.worker.sleep",
-    "worker-max-retries": "landscape.worker.max-retries",
-    "worker-batch-size": "landscape.worker.batch-size",
-    "worker-lease-duration": "landscape.worker.lease-duration",
-    "worker-lease-reset-interval": "landscape.worker.lease-reset-interval",
-    "worker-concurrency": "landscape.worker.concurrency",
-    "worker-conn-max-lifetime": "landscape.worker.conn-max-lifetime",
+    "worker-sleep": "landscape.task-handler.worker.sleep",
+    "worker-max-retries": "landscape.task-handler.worker.max-retries",
+    "worker-batch-size": "landscape.task-handler.worker.batch-size",
+    "worker-lease-duration": "landscape.task-handler.worker.lease-duration",
+    "worker-lease-reset-interval": "landscape.task-handler.worker.lease-reset-interval",
+    "worker-concurrency": "landscape.task-handler.worker.concurrency",
+    "worker-conn-max-lifetime": "landscape.task-handler.worker.conn-max-lifetime",
     "cleanup-failed-retention-duration": "landscape.cleanup.failed-retention-duration",
     "cleanup-batch-size": "landscape.cleanup.batch-size",
     "cleanup-batch-sleep": "landscape.cleanup.batch-sleep",

@@ -101,7 +101,7 @@ class TestInstallAndLifecycle:
 
         set_config = mock_snap.set.call_args[0][0]
         assert set_config["landscape.logging.level"] == "debug"
-        assert set_config["landscape.worker.concurrency"] == "8"
+        assert set_config["landscape.task-handler.worker.concurrency"] == "8"
         assert set_config["landscape.cleanup.batch-size"] == "100"
 
 
@@ -1136,12 +1136,12 @@ class TestConfigureRuntime:
         cfg = mock_snap.set.call_args[0][0]
         assert cfg["landscape.logging.level"] == "debug"
         assert cfg["landscape.logging.human-readable"] == "true"
-        assert cfg["landscape.worker.sleep"] == "5s"
-        assert cfg["landscape.worker.batch-size"] == "10"
-        assert cfg["landscape.worker.lease-duration"] == "2m"
-        assert cfg["landscape.worker.lease-reset-interval"] == "5m"
-        assert cfg["landscape.worker.concurrency"] == "4"
-        assert cfg["landscape.worker.conn-max-lifetime"] == "5m"
+        assert cfg["landscape.task-handler.worker.sleep"] == "5s"
+        assert cfg["landscape.task-handler.worker.batch-size"] == "10"
+        assert cfg["landscape.task-handler.worker.lease-duration"] == "2m"
+        assert cfg["landscape.task-handler.worker.lease-reset-interval"] == "5m"
+        assert cfg["landscape.task-handler.worker.concurrency"] == "4"
+        assert cfg["landscape.task-handler.worker.conn-max-lifetime"] == "5m"
         assert cfg["landscape.cleanup.failed-retention-duration"] == "720h"
         assert cfg["landscape.cleanup.batch-size"] == "50"
         assert cfg["landscape.cleanup.batch-sleep"] == "50ms"
@@ -1164,8 +1164,8 @@ class TestConfigureRuntime:
 
         cfg = mock_snap.set.call_args[0][0]
         assert cfg == {"landscape.logging.level": "info"}
-        assert "landscape.worker.max-retries" not in cfg
-        assert "landscape.worker.sleep" not in cfg
+        assert "landscape.task-handler.worker.max-retries" not in cfg
+        assert "landscape.task-handler.worker.sleep" not in cfg
 
     def test_max_retries_zero_is_applied(self, mock_snap: MagicMock):
         """A worker-max-retries of 0 is a valid value and must be pushed."""
@@ -1175,7 +1175,7 @@ class TestConfigureRuntime:
         landscape_task_handler.configure_runtime({"worker-max-retries": 0})
 
         cfg = mock_snap.set.call_args[0][0]
-        assert cfg["landscape.worker.max-retries"] == "0"
+        assert cfg["landscape.task-handler.worker.max-retries"] == "0"
 
     def test_no_options_does_not_set_or_restart(self, mock_snap: MagicMock):
         """An empty runtime config leaves the snap untouched."""
@@ -1190,7 +1190,10 @@ class TestConfigureRuntime:
         """Re-applying identical runtime config must not re-set or restart."""
         mock_snap.present = True
         mock_snap.get.return_value = {
-            "landscape": {"logging": {"level": "info"}, "worker": {"concurrency": 4}}
+            "landscape": {
+                "logging": {"level": "info"},
+                "task-handler": {"worker": {"concurrency": 4}},
+            }
         }
 
         landscape_task_handler.configure_runtime({"log-level": "info", "worker-concurrency": 4})
