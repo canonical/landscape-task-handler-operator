@@ -6,7 +6,6 @@ The intention is that this module could be used outside the context of a charm.
 
 import logging
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -37,24 +36,6 @@ CERT_RENEWER_SERVICE = "cert-renewer"
 DEFAULT_GRPC_PORT = "50051"
 
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
-
-# Maps charm config option names to the snap config keys read by the workload's
-# start scripts. Covers the shared logging settings (server, worker and cleanup),
-# the worker (landscape.task-handler.worker.*) and the cleanup service (landscape.cleanup.*).
-_RUNTIME_KEY_MAP = {
-    "log-level": "landscape.logging.level",
-    "log-human-readable": "landscape.logging.human-readable",
-    "worker-sleep": "landscape.task-handler.worker.sleep",
-    "worker-max-retries": "landscape.task-handler.worker.max-retries",
-    "worker-batch-size": "landscape.task-handler.worker.batch-size",
-    "worker-lease-duration": "landscape.task-handler.worker.lease-duration",
-    "worker-lease-reset-interval": "landscape.task-handler.worker.lease-reset-interval",
-    "worker-concurrency": "landscape.task-handler.worker.concurrency",
-    "worker-conn-max-lifetime": "landscape.task-handler.worker.conn-max-lifetime",
-    "cleanup-failed-retention-duration": "landscape.cleanup.failed-retention-duration",
-    "cleanup-batch-size": "landscape.cleanup.batch-size",
-    "cleanup-batch-sleep": "landscape.cleanup.batch-sleep",
-}
 
 
 def install(channel: str = DEFAULT_SNAP_CHANNEL) -> None:
@@ -160,29 +141,6 @@ def configure_stores(
         )
 
     _set_snap_config_if_changed(task_handler_snap, config)
-
-
-def configure_runtime(options: Mapping[str, Any]) -> None:
-    """Apply the logging, worker and cleanup runtime settings to the snap.
-
-    ``options`` is the charm's config mapping; only the keys in
-    ``_RUNTIME_KEY_MAP`` are consumed and the rest are ignored. Options that are
-    unset (absent, ``None`` or empty) are left untouched so the snap's own
-    defaults apply. The logging settings are shared by the server, worker and
-    cleanup services; the worker and cleanup settings are read by their
-    respective services. Only writes snap config when a value actually changes,
-    so unrelated events do not trigger a restart.
-    """
-    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
-    config: dict[str, str] = {}
-    for option, snap_key in _RUNTIME_KEY_MAP.items():
-        value = options.get(option)
-        if value is None or value == "":
-            continue
-        config[snap_key] = _to_snap_value(value)
-
-    if config:
-        _set_snap_config_if_changed(task_handler_snap, config)
 
 
 def _to_snap_value(value: Any) -> str:

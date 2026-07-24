@@ -200,7 +200,6 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         if landscape_task_handler.is_installed():
             applied &= self._apply_task_db_config()
             applied &= self._apply_stores_config()
-            applied &= self._apply_runtime_config()
             applied &= self._apply_grpc_certificates()
 
         if applied:
@@ -285,22 +284,6 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         except (snap.SnapError, snap.SnapNotFoundError):
             logger.exception("failed to configure Landscape stores")
             self.unit.status = ops.BlockedStatus("Failed to configure Landscape stores")
-            return False
-        return True
-
-    def _apply_runtime_config(self) -> bool:
-        """Apply the logging, worker and cleanup runtime settings from charm config.
-
-        These are plain charm configuration (not relation data), so they apply
-        whenever the snap is installed. Only options the operator has explicitly
-        set are pushed; unset options fall back to the snap's own defaults.
-        Returns False (and sets BlockedStatus) only when a snap operation fails.
-        """
-        try:
-            landscape_task_handler.configure_runtime(dict(self.config))
-        except (snap.SnapError, snap.SnapNotFoundError):
-            logger.exception("failed to apply runtime configuration")
-            self.unit.status = ops.BlockedStatus("Failed to apply runtime configuration")
             return False
         return True
 
