@@ -12,6 +12,8 @@ from ops import testing
 import landscape_task_handler
 from charm import LandscapeTaskHandlerCharm
 
+ENV_FILE_KEY = "landscape.env-file"
+
 
 @pytest.fixture
 def mock_snap(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
@@ -80,6 +82,24 @@ class TestInstallAndLifecycle:
         )
 
         mock_snap.ensure.assert_called_once_with(snap.SnapState.Latest, channel="latest/edge")
+
+    def test_config_changed_sets_snap_env(self, mock_snap: MagicMock):
+        """A channel config change refreshes the snap to the new channel."""
+        mock_snap.present = True
+        mock_snap.revision = "45"
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        ctx.run(
+            ctx.on.config_changed(),
+            testing.State(config={"task-handler-snap-env": "FOO=foo\nBAR=bar\n"}),
+        )
+
+        assert mock_snap.set.call_count == 1
+
+        set_config = mock_snap.set.call_args[0][0]
+
+        assert set_config[ENV_FILE_KEY] is not None
+        assert set_config[ENV_FILE_KEY] == "FOO=foo\nBAR=bar\n"
 
 
 class TestTaskDbRelation:
