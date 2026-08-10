@@ -80,6 +80,13 @@ config:
         landscape-task-handler snap (for example "latest/stable" or
         "latest/edge"). Changing this value refreshes the snap to the new
         channel.
+    task-handler-snap-env:
+      type: string
+      description: |
+        A string of newline-delimited environment variable assignments passed to configure
+        the landscape-task-handler snap. Each assignment should be of the form
+        `KEY=VALUE` or `KEY="VALUE"` to preserve spaces and special characters.
+        Usage: "juju config landscape-task-handler task-handler-snap-env=@task-handler.env"
     grpc-external-port:
       default: 50053
       type: int
