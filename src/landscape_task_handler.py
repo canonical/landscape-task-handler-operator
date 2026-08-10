@@ -143,17 +143,6 @@ def configure_stores(
     _set_snap_config_if_changed(task_handler_snap, config)
 
 
-def _to_snap_value(value: Any) -> str:
-    """Render a charm config value as the string the snap expects.
-
-    Booleans become lowercase ``true``/``false`` (matching the snap's boolean
-    parsing); everything else is stringified as-is.
-    """
-    if isinstance(value, bool):
-        return str(value).lower()
-    return str(value)
-
-
 def _database_section(
     prefix: str,
     host: str,
