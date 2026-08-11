@@ -370,6 +370,9 @@ def set_snap_env(env: str) -> None:
         ENV_DIR.mkdir(parents=True, exist_ok=True)
         _atomic_write(ENV_FILE, env, 0o600)
         task_handler_snap.set({ENV_FILE_KEY: str(ENV_FILE)})
+    # In case we get in a state where the task handler snap failed to set the env file
+    elif ENV_FILE.exists():
+        _set_snap_config_if_changed(task_handler_snap, {ENV_FILE_KEY: str(ENV_FILE)})
 
 
 def _nested_get(config: dict[str, Any], dotted_key: str) -> Any:

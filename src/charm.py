@@ -171,7 +171,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         try:
             landscape_task_handler.refresh(channel=self._snap_channel)
             landscape_task_handler.set_snap_env(self._snap_env)
-        except (snap.SnapError, snap.SnapNotFoundError):
+        except (snap.SnapError, snap.SnapNotFoundError, OSError):
             logger.exception("failed to apply landscape-task-handler configuration")
             self.unit.status = ops.BlockedStatus("Failed to apply configuration")
             return
