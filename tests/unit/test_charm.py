@@ -334,11 +334,15 @@ class TestGrpcCertificates:
         mock_snap.get.return_value = {
             "landscape": {
                 "task-handler": {
-                    "host": "10.0.0.9",
-                    "grpc-port": "50051",
-                    "grpc-certs-dir": str(landscape_task_handler.CERTS_ACTIVE_DIR),
-                }
-            }
+                    "server": {
+                        "host": "10.0.0.9",
+                        "grpc-port": "50051",
+                    },
+                    "grpc": {
+                        "certs-dir": str(landscape_task_handler.CERTS_ACTIVE_DIR),
+                    },
+                },
+            },
         }
 
         landscape_task_handler.configure_grpc(host="10.0.0.9")
