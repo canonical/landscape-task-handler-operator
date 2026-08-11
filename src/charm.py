@@ -117,6 +117,11 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         return str(self.config["task-handler-snap-channel"])
 
     @property
+    def _snap_env(self) -> str:
+        """Return the configured snap environment variables."""
+        return str(self.config["task-handler-snap-env"])
+
+    @property
     def _grpc_external_port(self) -> int:
         """Return the haproxy frontend port the outbox dials for the gRPC service.
 
@@ -165,6 +170,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("applying configuration")
         try:
             landscape_task_handler.refresh(channel=self._snap_channel)
+            landscape_task_handler.set_snap_env(self._snap_env)
         except (snap.SnapError, snap.SnapNotFoundError):
             logger.exception("failed to apply landscape-task-handler configuration")
             self.unit.status = ops.BlockedStatus("Failed to apply configuration")

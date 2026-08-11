@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 TASK_HANDLER_SNAP_NAME = "landscape-task-handler"
 DEFAULT_SNAP_CHANNEL = "latest/edge"
+ENV_FILE_KEY = "landscape.env-file"
 
 # The long-running (always-active) snap services. Other snap services (for
 # example the cleanup and cert-renewer services) are one-shot daemons that are
@@ -27,12 +28,14 @@ _TASK_DB_PREFIX = "task-handler"
 SNAP_COMMON = Path(f"/var/snap/{TASK_HANDLER_SNAP_NAME}/common")
 CERTS_ACTIVE_DIR = SNAP_COMMON / "certs" / "active"
 CUSTOM_CERTS_DIR = SNAP_COMMON / "custom-certs"
+ENV_DIR = SNAP_COMMON / "env"
 CA_CERT_FILE = "ca.crt"
 SERVER_CERT_FILE = "server.crt"
 SERVER_KEY_FILE = "server.key"
 CLIENT_CERT_FILE = "client.crt"
 CLIENT_KEY_FILE = "client.key"
 CERT_RENEWER_SERVICE = "cert-renewer"
+ENV_FILE = ENV_DIR / "landscape-task-handler.env"
 DEFAULT_GRPC_PORT = "50051"
 
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
@@ -345,6 +348,28 @@ def _set_snap_config_if_changed(task_handler_snap: snap.Snap, config: dict[str, 
     if changed_config:
         task_handler_snap.set(changed_config)
     return bool(changed_config)
+
+
+def set_snap_env(env: str) -> None:
+    """Set snap environment variables from a string.
+
+    Check if content of the env string has changed, write it to a file if needed,
+    and then set the file path to the landscape.env-file snap config key.
+    """
+    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
+
+    # Check if the env file already exists and read its content
+    if ENV_FILE.exists():
+        current_env = ENV_FILE.read_text()
+    else:
+        current_env = ""
+
+    # If the content has changed, write the new content to the env file and set config
+    # to force reload
+    if current_env != env:
+        ENV_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(ENV_FILE, env, 0o600)
+        task_handler_snap.set({ENV_FILE_KEY: str(ENV_FILE)})
 
 
 def _nested_get(config: dict[str, Any], dotted_key: str) -> Any:
