@@ -12,8 +12,6 @@ from ops import testing
 import landscape_task_handler
 from charm import LandscapeTaskHandlerCharm
 
-ENV_FILE_KEY = "landscape.env-file"
-
 
 @pytest.fixture
 def mock_snap(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
@@ -83,8 +81,13 @@ class TestInstallAndLifecycle:
 
         mock_snap.ensure.assert_called_once_with(snap.SnapState.Latest, channel="latest/edge")
 
-    def test_config_changed_sets_snap_env(self, mock_snap: MagicMock):
-        """A channel config change refreshes the snap to the new channel."""
+    def test_config_changed_sets_snap_env(self, monkeypatch, tmp_path, mock_snap: MagicMock):
+        """An environment config change reloads config if the environment changed."""
+        env_dir = tmp_path / "env"
+        env_file = env_dir / "landscape-task-handler.env"
+        monkeypatch.setattr(landscape_task_handler, "ENV_DIR", env_dir)
+        monkeypatch.setattr(landscape_task_handler, "ENV_FILE", env_file)
+
         mock_snap.present = True
         mock_snap.revision = "45"
         ctx = testing.Context(LandscapeTaskHandlerCharm)
@@ -98,8 +101,61 @@ class TestInstallAndLifecycle:
 
         set_config = mock_snap.set.call_args[0][0]
 
-        assert set_config[ENV_FILE_KEY] is not None
-        assert set_config[ENV_FILE_KEY] == "FOO=foo\nBAR=bar\n"
+        assert set_config[landscape_task_handler.ENV_FILE_KEY] is not None
+        assert set_config[landscape_task_handler.ENV_FILE_KEY] == str(
+            landscape_task_handler.ENV_FILE
+        )
+        assert landscape_task_handler.ENV_FILE.read_text() == "FOO=foo\nBAR=bar\n"
+
+    def test_config_changed_unchanged_snap_env(self, monkeypatch, tmp_path, mock_snap: MagicMock):
+        """A config change that does not change the env file does not reload config."""
+        env_dir = tmp_path / "env"
+        env_file = env_dir / "landscape-task-handler.env"
+        monkeypatch.setattr(landscape_task_handler, "ENV_DIR", env_dir)
+        monkeypatch.setattr(landscape_task_handler, "ENV_FILE", env_file)
+
+        env_dir.mkdir(parents=True, exist_ok=True)
+        env_file.write_text("FOO=foo\nBAR=bar\n")
+
+        mock_snap.present = True
+        mock_snap.revision = "46"
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        ctx.run(
+            ctx.on.config_changed(),
+            testing.State(config={"task-handler-snap-env": "FOO=foo\nBAR=bar\n"}),
+        )
+
+        mock_snap.set.assert_not_called()
+
+    def test_config_changed_overwrite_snap_env(self, monkeypatch, tmp_path, mock_snap: MagicMock):
+        """A config change that overwrites the env file reloads config."""
+        env_dir = tmp_path / "env"
+        env_file = env_dir / "landscape-task-handler.env"
+        monkeypatch.setattr(landscape_task_handler, "ENV_DIR", env_dir)
+        monkeypatch.setattr(landscape_task_handler, "ENV_FILE", env_file)
+
+        env_dir.mkdir(parents=True, exist_ok=True)
+        env_file.write_text("FOO=foo\nBAR=bar\n")
+
+        mock_snap.present = True
+        mock_snap.revision = "47"
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        ctx.run(
+            ctx.on.config_changed(),
+            testing.State(config={"task-handler-snap-env": "FOO=newfoo\nBAR=newbar\n"}),
+        )
+
+        assert mock_snap.set.call_count == 1
+
+        set_config = mock_snap.set.call_args[0][0]
+
+        assert set_config[landscape_task_handler.ENV_FILE_KEY] is not None
+        assert set_config[landscape_task_handler.ENV_FILE_KEY] == str(
+            landscape_task_handler.ENV_FILE
+        )
+        assert landscape_task_handler.ENV_FILE.read_text() == "FOO=newfoo\nBAR=newbar\n"
 
 
 class TestTaskDbRelation:
