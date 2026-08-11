@@ -96,8 +96,7 @@ config:
         task-handler's mTLS gRPC service, and the port the outbox is told to
         dial. This must be unique across all haproxy-route services sharing the
         same Landscape hostname; in particular it must differ from the port used
-        by landscape-server's ubuntu-installer-attach gRPC service (50051). The
-        task-handler snap's own listen port stays 50051 (the haproxy backend). # TODO amend this note
+        by landscape-server's ubuntu-installer-attach gRPC service (50051).
 
 actions:
   show-config:
