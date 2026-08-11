@@ -233,9 +233,9 @@ def configure_grpc(host: str, port: str = DEFAULT_GRPC_PORT, certs_dir: str | No
     """
     task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
     config = {
-        "landscape.task-handler.host": host,
-        "landscape.task-handler.grpc-port": port,
-        "landscape.task-handler.grpc-certs-dir": certs_dir or str(CERTS_ACTIVE_DIR),
+        "landscape.task-handler.server.host": host,
+        "landscape.task-handler.server.grpc-port": port,
+        "landscape.task-handler.grpc.certs-dir": certs_dir or str(CERTS_ACTIVE_DIR),
     }
     _set_snap_config_if_changed(task_handler_snap, config)
 

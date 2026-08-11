@@ -319,9 +319,9 @@ class TestGrpcCertificates:
         landscape_task_handler.configure_grpc(host="10.0.0.9")
 
         cfg = mock_snap.set.call_args[0][0]
-        assert cfg["landscape.task-handler.host"] == "10.0.0.9"
-        assert cfg["landscape.task-handler.grpc-port"] == "50051"
-        assert cfg["landscape.task-handler.grpc-certs-dir"] == str(
+        assert cfg["landscape.task-handler.server.host"] == "10.0.0.9"
+        assert cfg["landscape.task-handler.server.grpc-port"] == "50051"
+        assert cfg["landscape.task-handler.grpc.certs-dir"] == str(
             landscape_task_handler.CERTS_ACTIVE_DIR
         )
         mock_snap.restart.assert_not_called()
@@ -1019,7 +1019,7 @@ class TestModuleFunctions:
         mock_snap.get.return_value = None
         landscape_task_handler.configure_grpc(host="1.2.3.4", certs_dir="/custom")
         cfg = mock_snap.set.call_args[0][0]
-        assert cfg["landscape.task-handler.grpc-certs-dir"] == "/custom"
+        assert cfg["landscape.task-handler.grpc.certs-dir"] == "/custom"
 
     def test_get_version_present(self, mock_snap: MagicMock):
         mock_snap.present = True
