@@ -119,6 +119,13 @@ class TestInstallAndLifecycle:
 
         mock_snap.present = True
         mock_snap.revision = "46"
+
+        # Build config dictionary to be returned by snap get
+        splits = landscape_task_handler.ENV_FILE_KEY.split(".")
+        mock_snap.get.return_value = str(env_file)
+        for part in splits[::-1]:
+            mock_snap.get.return_value = {part: mock_snap.get.return_value}
+
         ctx = testing.Context(LandscapeTaskHandlerCharm)
 
         ctx.run(
@@ -156,6 +163,25 @@ class TestInstallAndLifecycle:
             landscape_task_handler.ENV_FILE
         )
         assert landscape_task_handler.ENV_FILE.read_text() == "FOO=newfoo\nBAR=newbar\n"
+
+    def test_config_changed_snap_env_os_error_blocks(self, monkeypatch, mock_snap: MagicMock):
+        """An OSError while writing the env file blocks the unit."""
+        monkeypatch.setattr(
+            landscape_task_handler,
+            "set_snap_env",
+            MagicMock(side_effect=OSError("disk full")),
+        )
+
+        mock_snap.present = True
+        mock_snap.revision = "48"
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        state_out = ctx.run(
+            ctx.on.config_changed(),
+            testing.State(config={"task-handler-snap-env": "FOO=foo\nBAR=bar\n"}),
+        )
+
+        assert state_out.unit_status == testing.BlockedStatus("Failed to apply configuration")
 
 
 class TestTaskDbRelation:
