@@ -81,6 +81,7 @@ config:
         "latest/edge"). Changing this value refreshes the snap to the new
         channel.
     task-handler-snap-env:
+      default: ""
       type: string
       description: |
         A string of newline-delimited environment variable assignments passed to configure
