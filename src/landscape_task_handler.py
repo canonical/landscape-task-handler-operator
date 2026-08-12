@@ -6,7 +6,6 @@ The intention is that this module could be used outside the context of a charm.
 
 import logging
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 TASK_HANDLER_SNAP_NAME = "landscape-task-handler"
 DEFAULT_SNAP_CHANNEL = "latest/edge"
+ENV_FILE_KEY = "landscape.env-file"
 
 # The long-running (always-active) snap services. Other snap services (for
 # example the cleanup and cert-renewer services) are one-shot daemons that are
@@ -28,33 +28,17 @@ _TASK_DB_PREFIX = "task-handler"
 SNAP_COMMON = Path(f"/var/snap/{TASK_HANDLER_SNAP_NAME}/common")
 CERTS_ACTIVE_DIR = SNAP_COMMON / "certs" / "active"
 CUSTOM_CERTS_DIR = SNAP_COMMON / "custom-certs"
+ENV_DIR = SNAP_COMMON / "env"
 CA_CERT_FILE = "ca.crt"
 SERVER_CERT_FILE = "server.crt"
 SERVER_KEY_FILE = "server.key"
 CLIENT_CERT_FILE = "client.crt"
 CLIENT_KEY_FILE = "client.key"
 CERT_RENEWER_SERVICE = "cert-renewer"
+ENV_FILE = ENV_DIR / "landscape-task-handler.env"
 DEFAULT_GRPC_PORT = "50051"
 
 SENSITIVE_CONFIG_FIELDS = frozenset({"password", "secret"})
-
-# Maps charm config option names to the snap config keys read by the workload's
-# start scripts. Covers the shared logging settings (server, worker and cleanup),
-# the worker (landscape.task-handler.worker.*) and the cleanup service (landscape.cleanup.*).
-_RUNTIME_KEY_MAP = {
-    "log-level": "landscape.logging.level",
-    "log-human-readable": "landscape.logging.human-readable",
-    "worker-sleep": "landscape.task-handler.worker.sleep",
-    "worker-max-retries": "landscape.task-handler.worker.max-retries",
-    "worker-batch-size": "landscape.task-handler.worker.batch-size",
-    "worker-lease-duration": "landscape.task-handler.worker.lease-duration",
-    "worker-lease-reset-interval": "landscape.task-handler.worker.lease-reset-interval",
-    "worker-concurrency": "landscape.task-handler.worker.concurrency",
-    "worker-conn-max-lifetime": "landscape.task-handler.worker.conn-max-lifetime",
-    "cleanup-failed-retention-duration": "landscape.cleanup.failed-retention-duration",
-    "cleanup-batch-size": "landscape.cleanup.batch-size",
-    "cleanup-batch-sleep": "landscape.cleanup.batch-sleep",
-}
 
 
 def install(channel: str = DEFAULT_SNAP_CHANNEL) -> None:
@@ -162,40 +146,6 @@ def configure_stores(
     _set_snap_config_if_changed(task_handler_snap, config)
 
 
-def configure_runtime(options: Mapping[str, Any]) -> None:
-    """Apply the logging, worker and cleanup runtime settings to the snap.
-
-    ``options`` is the charm's config mapping; only the keys in
-    ``_RUNTIME_KEY_MAP`` are consumed and the rest are ignored. Options that are
-    unset (absent, ``None`` or empty) are left untouched so the snap's own
-    defaults apply. The logging settings are shared by the server, worker and
-    cleanup services; the worker and cleanup settings are read by their
-    respective services. Only writes snap config when a value actually changes,
-    so unrelated events do not trigger a restart.
-    """
-    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
-    config: dict[str, str] = {}
-    for option, snap_key in _RUNTIME_KEY_MAP.items():
-        value = options.get(option)
-        if value is None or value == "":
-            continue
-        config[snap_key] = _to_snap_value(value)
-
-    if config:
-        _set_snap_config_if_changed(task_handler_snap, config)
-
-
-def _to_snap_value(value: Any) -> str:
-    """Render a charm config value as the string the snap expects.
-
-    Booleans become lowercase ``true``/``false`` (matching the snap's boolean
-    parsing); everything else is stringified as-is.
-    """
-    if isinstance(value, bool):
-        return str(value).lower()
-    return str(value)
-
-
 def _database_section(
     prefix: str,
     host: str,
@@ -283,9 +233,9 @@ def configure_grpc(host: str, port: str = DEFAULT_GRPC_PORT, certs_dir: str | No
     """
     task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
     config = {
-        "landscape.task-handler.host": host,
-        "landscape.task-handler.grpc-port": port,
-        "landscape.task-handler.grpc-certs-dir": certs_dir or str(CERTS_ACTIVE_DIR),
+        "landscape.task-handler.server.host": host,
+        "landscape.task-handler.server.grpc-port": port,
+        "landscape.task-handler.grpc.certs-dir": certs_dir or str(CERTS_ACTIVE_DIR),
     }
     _set_snap_config_if_changed(task_handler_snap, config)
 
@@ -398,6 +348,31 @@ def _set_snap_config_if_changed(task_handler_snap: snap.Snap, config: dict[str, 
     if changed_config:
         task_handler_snap.set(changed_config)
     return bool(changed_config)
+
+
+def set_snap_env(env: str) -> None:
+    """Set snap environment variables from a string.
+
+    Check if content of the env string has changed, write it to a file if needed,
+    and then set the file path to the landscape.env-file snap config key.
+    """
+    task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
+
+    # Check if the env file already exists and read its content
+    if ENV_FILE.exists():
+        current_env = ENV_FILE.read_text()
+    else:
+        current_env = ""
+
+    # If the content has changed, write the new content to the env file and set config
+    # to force reload
+    if current_env != env:
+        ENV_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(ENV_FILE, env, 0o600)
+        task_handler_snap.set({ENV_FILE_KEY: str(ENV_FILE)})
+    # In case we get in a state where the task handler snap failed to set the env file
+    elif ENV_FILE.exists():
+        _set_snap_config_if_changed(task_handler_snap, {ENV_FILE_KEY: str(ENV_FILE)})
 
 
 def _nested_get(config: dict[str, Any], dotted_key: str) -> Any:

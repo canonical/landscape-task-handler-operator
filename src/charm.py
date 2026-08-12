@@ -117,6 +117,11 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         return str(self.config["task-handler-snap-channel"])
 
     @property
+    def _snap_env(self) -> str:
+        """Return the configured snap environment variables."""
+        return str(self.config["task-handler-snap-env"])
+
+    @property
     def _grpc_external_port(self) -> int:
         """Return the haproxy frontend port the outbox dials for the gRPC service.
 
@@ -165,7 +170,8 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("applying configuration")
         try:
             landscape_task_handler.refresh(channel=self._snap_channel)
-        except (snap.SnapError, snap.SnapNotFoundError):
+            landscape_task_handler.set_snap_env(self._snap_env)
+        except (snap.SnapError, snap.SnapNotFoundError, OSError):
             logger.exception("failed to apply landscape-task-handler configuration")
             self.unit.status = ops.BlockedStatus("Failed to apply configuration")
             return
@@ -200,7 +206,6 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         if landscape_task_handler.is_installed():
             applied &= self._apply_task_db_config()
             applied &= self._apply_stores_config()
-            applied &= self._apply_runtime_config()
             applied &= self._apply_grpc_certificates()
 
         if applied:
@@ -285,22 +290,6 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         except (snap.SnapError, snap.SnapNotFoundError):
             logger.exception("failed to configure Landscape stores")
             self.unit.status = ops.BlockedStatus("Failed to configure Landscape stores")
-            return False
-        return True
-
-    def _apply_runtime_config(self) -> bool:
-        """Apply the logging, worker and cleanup runtime settings from charm config.
-
-        These are plain charm configuration (not relation data), so they apply
-        whenever the snap is installed. Only options the operator has explicitly
-        set are pushed; unset options fall back to the snap's own defaults.
-        Returns False (and sets BlockedStatus) only when a snap operation fails.
-        """
-        try:
-            landscape_task_handler.configure_runtime(dict(self.config))
-        except (snap.SnapError, snap.SnapNotFoundError):
-            logger.exception("failed to apply runtime configuration")
-            self.unit.status = ops.BlockedStatus("Failed to apply runtime configuration")
             return False
         return True
 
