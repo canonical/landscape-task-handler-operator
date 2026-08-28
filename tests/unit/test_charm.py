@@ -92,10 +92,10 @@ class TestInstallAndLifecycle:
 
         ctx.run(
             ctx.on.config_changed(),
-            testing.State(config={"task-handler-snap-channel": "latest/edge"}),
+            testing.State(config={"task-handler-snap-channel": "latest/stable"}),
         )
 
-        mock_snap.ensure.assert_called_once_with(snap.SnapState.Latest, channel="latest/edge")
+        mock_snap.ensure.assert_called_once_with(snap.SnapState.Latest, channel="latest/stable")
 
     def test_config_changed_sets_snap_env(self, monkeypatch, tmp_path, mock_snap: MagicMock):
         """An environment config change reloads config if the environment changed."""
@@ -1456,7 +1456,11 @@ class TestOutboxCertPublishingBranches:
         bundle = {"ca-cert": "CA-PEM", "client-cert": "CLIENT-PEM", "client-key": "CLIENT-KEY-PEM"}
         secret = testing.Secret(tracked_content=bundle, owner="app")
         stores = self._stores_with_local(
-            **{"certs-secret-id": secret.id, "certs-revision": "3", "grpc-address": "old"}
+            **{
+                "certs-secret-id": secret.id,
+                "certs-revision": "3",
+                "grpc-address": "old",
+            }
         )
         state_in = testing.State(leader=True, relations={stores}, secrets={secret})
 
@@ -1486,7 +1490,10 @@ class TestOutboxCertPublishingBranches:
         self._patch_client_cert(monkeypatch)
         ctx = testing.Context(LandscapeTaskHandlerCharm)
         stores = self._stores_with_local(
-            **{"certs-secret-id": "secret:doesnotexist", "certs-revision": "3"}
+            **{
+                "certs-secret-id": "secret:doesnotexist",
+                "certs-revision": "3",
+            }
         )
         state_in = testing.State(leader=True, relations={stores})
 

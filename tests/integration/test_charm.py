@@ -9,7 +9,6 @@ import logging
 import pathlib
 
 import jubilant
-import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def leader_unit_name(juju: jubilant.Juju, app: str = APP_NAME) -> str:
     for name, unit_status in app_status.units.items():
         if unit_status.leader:
             return name
-    pytest.fail(f"no leader unit found for {app}")
+    raise AssertionError(f"no leader unit found for {app}")
 
 
 def test_deploy(charm: pathlib.Path, juju: jubilant.Juju):
@@ -114,7 +113,7 @@ def _landscape_server_stores_data(juju: jubilant.Juju, unit: str) -> dict:
     for relation in unit_info.relation_info:
         if relation.endpoint == "landscape-server":
             return relation.app_data
-    pytest.fail(f"{unit} has no landscape-server relation data")
+    raise AssertionError(f"{unit} has no landscape-server relation data")
 
 
 def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):

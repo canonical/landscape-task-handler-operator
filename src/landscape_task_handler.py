@@ -14,7 +14,7 @@ from charmlibs import snap
 logger = logging.getLogger(__name__)
 
 TASK_HANDLER_SNAP_NAME = "landscape-task-handler"
-DEFAULT_SNAP_CHANNEL = "latest/edge"
+DEFAULT_SNAP_CHANNEL = "latest/stable"
 ENV_FILE_KEY = "landscape.env-file"
 
 # The long-running (always-active) snap services. Other snap services (for
