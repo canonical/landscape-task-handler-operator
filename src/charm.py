@@ -35,6 +35,11 @@ CLIENT_CERT_COMMON_NAME = "landscape-outbox"
 STORES_SECRET_ID_KEY = "secret-id"
 STORES_PASSWORD_FIELD = "password"
 
+# Addresses that indicate landscape-server's published stores host is its own
+# PgBouncer subordinate (loopback-only), rather than a real, directly
+# reachable PostgreSQL/pooler address. See _stores_connection_params.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 LANDSCAPE_HOSTNAME_KEY = "hostname"
 
 GRPC_ADDRESS_KEY = "grpc-address"
@@ -299,25 +304,32 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
 
         landscape-server publishes the host/port/ssl-mode/certs it itself uses
         to reach the stores. Whenever it fronts them with PgBouncer, that's a
-        loopback (``localhost``) address with SSL disabled, which is only
-        reachable and correct from a machine colocated with that
-        landscape-server unit. If this unit already has a real,
-        independently-verified PostgreSQL address and SSL mode from its own
-        task-db relation, prefer those instead: they point at the same
-        underlying PostgreSQL deployment, work regardless of placement, and
-        (like task-db) don't need any client cert material for the
-        ``require`` SSL mode PostgreSQL's ``pg_hba.conf`` expects for
-        non-loopback connections. Falls back to landscape-server's published
-        values when task-db isn't available yet, or when landscape-server
-        isn't using PgBouncer (in which case its published host is already a
-        real, directly-reachable address).
+        loopback address (``localhost``/``127.0.0.1``/``::1``) with SSL
+        disabled, which is only reachable and correct from a machine
+        colocated with that landscape-server unit. In that specific case, if
+        this unit already has a real, independently-verified PostgreSQL
+        address and SSL mode from its own task-db relation, prefer those
+        instead: they point at the same underlying PostgreSQL deployment,
+        work regardless of placement, and (like task-db) don't need any
+        client cert material for the ``require`` SSL mode PostgreSQL's
+        ``pg_hba.conf`` expects for non-loopback connections.
+
+        If landscape-server's published host is anything other than a
+        loopback address, it's already real and directly reachable (either a
+        direct PostgreSQL connection, or some other externally-reachable
+        pooler), so its published values are used as-is: task-db's endpoint
+        isn't guaranteed to point at the same PostgreSQL deployment, and its
+        SSL mode/cert policy isn't necessarily what that other connection
+        requires.
         """
-        task_db_params = self._task_db_params()
-        if task_db_params is not None:
-            host, port, _, _, _, ssl = task_db_params
-            return host, port, ssl, None, None, None
+        host = app_data.get("host")
+        if host in _LOOPBACK_HOSTS:
+            task_db_params = self._task_db_params()
+            if task_db_params is not None:
+                task_db_host, task_db_port, _, _, _, ssl = task_db_params
+                return task_db_host, task_db_port, ssl, None, None, None
         return (
-            app_data.get("host"),
+            host,
             app_data.get("port"),
             app_data.get("sslmode", "disable"),
             app_data.get("sslrootcert"),

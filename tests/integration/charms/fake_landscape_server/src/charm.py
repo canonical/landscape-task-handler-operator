@@ -35,8 +35,7 @@ class FakeLandscapeServerCharm(ops.CharmBase):
         if not self.unit.is_leader():
             return
         for relation in self.model.relations.get(RELATION_NAME, []):
-            secret = self.app.add_secret({"password": "fakestorespw"})
-            secret.grant(relation)
+            secret = self._get_or_create_secret(relation)
             relation.data[self.app].update(
                 {
                     # A PgBouncer-style loopback address: only reachable from
@@ -52,6 +51,22 @@ class FakeLandscapeServerCharm(ops.CharmBase):
                 }
             )
         self.unit.status = ops.ActiveStatus()
+
+    def _get_or_create_secret(self, relation: ops.Relation) -> ops.Secret:
+        """Return the existing secret for this relation, creating one only once.
+
+        Avoids leaving behind a new, ungranted secret every time this charm's
+        install/config-changed/relation-joined hooks fire.
+        """
+        existing_id = relation.data[self.app].get("secret-id")
+        if existing_id:
+            try:
+                return self.model.get_secret(id=existing_id)
+            except ops.SecretNotFoundError:
+                pass
+        secret = self.app.add_secret({"password": "fakestorespw"})
+        secret.grant(relation)
+        return secret
 
 
 if __name__ == "__main__":
