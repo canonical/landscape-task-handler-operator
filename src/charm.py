@@ -221,10 +221,13 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         """Declare the unit's open ports, mirroring landscape-server's own pattern.
 
         Opens the gRPC backend port the haproxy-route frontend actually
-        connects to (see ``landscape_task_handler.DEFAULT_GRPC_PORT``, always
-        used since nothing in this charm currently overrides it), so the
-        gRPC service is reachable through haproxy without requiring an
-        out-of-band ``juju exec -- open-port``.
+        connects to. ``landscape_task_handler.configure_grpc`` accepts a
+        ``port`` argument (defaulting to ``DEFAULT_GRPC_PORT``), but this
+        charm's only call site never overrides it, so ``DEFAULT_GRPC_PORT`` is
+        always the real listen port today. If a future charm config option
+        ever let operators override the gRPC listen port, this method would
+        need updating to open that configured port instead, or it would
+        silently open the wrong one.
         """
         self.unit.set_ports(ops.Port("tcp", int(landscape_task_handler.DEFAULT_GRPC_PORT)))
 
