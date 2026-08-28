@@ -1,0 +1,27 @@
+# Copyright 2026-2026 Canonical Limited. All rights reserved.
+#
+# Minimal fake provider charm for the `landscape-server` relation, used only
+# by the task-handler integration tests. It reproduces the exact real-world
+# bug scenario: it publishes a PgBouncer-style `localhost` host/port for the
+# shared stores, which is only reachable from its own machine, so tests can
+# verify task-handler correctly prefers its own task-db relation's real,
+# reachable PostgreSQL endpoint instead.
+type: charm
+name: fake-landscape-server
+title: Fake Landscape Server (test double)
+summary: Test double for the landscape-server side of the landscape-server relation.
+description: |
+  Publishes landscape-server relation data for landscape-task-handler
+  integration tests only. Not for production use.
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+provides:
+  landscape-server:
+    interface: landscape-task-handler
+
+parts:
+  charm:
+    plugin: charm

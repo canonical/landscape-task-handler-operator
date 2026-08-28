@@ -246,16 +246,13 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             return True
         app_data = relation.data[relation.app]
 
-        host = app_data.get("host")
-        port = app_data.get("port")
+        host, port, ssl, ssl_root_cert, ssl_cert, ssl_key = self._stores_connection_params(
+            app_data
+        )
         user = app_data.get("user")
         main = app_data.get("main")
         account = app_data.get("account_1") or app_data.get("account-1")
         resource = app_data.get("resource_1") or app_data.get("resource-1")
-        ssl = app_data.get("sslmode", "disable")
-        ssl_root_cert = app_data.get("sslrootcert")
-        ssl_cert = app_data.get("sslcert")
-        ssl_key = app_data.get("sslkey")
 
         if (
             host is None
@@ -292,6 +289,41 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             self.unit.status = ops.BlockedStatus("Failed to configure Landscape stores")
             return False
         return True
+
+    def _stores_connection_params(
+        self, app_data
+    ) -> tuple[str | None, str | None, str, str | None, str | None, str | None]:
+        """Return connection params for the shared Landscape stores.
+
+        Returns (host, port, ssl, ssl_root_cert, ssl_cert, ssl_key).
+
+        landscape-server publishes the host/port/ssl-mode/certs it itself uses
+        to reach the stores. Whenever it fronts them with PgBouncer, that's a
+        loopback (``localhost``) address with SSL disabled, which is only
+        reachable and correct from a machine colocated with that
+        landscape-server unit. If this unit already has a real,
+        independently-verified PostgreSQL address and SSL mode from its own
+        task-db relation, prefer those instead: they point at the same
+        underlying PostgreSQL deployment, work regardless of placement, and
+        (like task-db) don't need any client cert material for the
+        ``require`` SSL mode PostgreSQL's ``pg_hba.conf`` expects for
+        non-loopback connections. Falls back to landscape-server's published
+        values when task-db isn't available yet, or when landscape-server
+        isn't using PgBouncer (in which case its published host is already a
+        real, directly-reachable address).
+        """
+        task_db_params = self._task_db_params()
+        if task_db_params is not None:
+            host, port, _, _, _, ssl = task_db_params
+            return host, port, ssl, None, None, None
+        return (
+            app_data.get("host"),
+            app_data.get("port"),
+            app_data.get("sslmode", "disable"),
+            app_data.get("sslrootcert"),
+            app_data.get("sslcert"),
+            app_data.get("sslkey"),
+        )
 
     def _apply_grpc_certificates(self) -> bool:
         """Provision the gRPC mTLS certificates and point the snap at them.

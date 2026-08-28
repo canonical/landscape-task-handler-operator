@@ -275,6 +275,75 @@ class TestStoresRelation:
 
         mock_snap.set.assert_not_called()
 
+    def test_stores_prefers_task_db_host_over_landscape_server_host(self, mock_snap: MagicMock):
+        """Prefer task-db's real endpoint and SSL mode over landscape-server's.
+
+        landscape-server publishes the address of its own PgBouncer
+        subordinate for the shared stores (loopback, SSL disabled), which is
+        only reachable from a machine colocated with that landscape-server
+        unit and, even then, only appropriate for the loopback connection
+        (see ``_stores_connection_params``). The task-db relation's endpoint
+        and SSL mode are real and independently verified to already work
+        (PostgreSQL's ``pg_hba.conf`` requires an encrypted connection for
+        non-loopback clients), so they should take priority whenever
+        available.
+        """
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        task_db_secret = testing.Secret(
+            tracked_content={"username": "taskuser", "password": "taskpw"}
+        )
+        task_db_relation = testing.Relation(
+            endpoint="task-db",
+            interface="postgresql_client",
+            remote_app_name="postgresql",
+            remote_app_data={
+                "database": "task-handler",
+                "endpoints": "10.0.0.5:5432",
+                "username": "taskuser",
+                "password": "taskpw",
+                "secret-user": task_db_secret.id,
+                "tls": "True",
+            },
+        )
+
+        stores_secret = testing.Secret(tracked_content={"password": "storespw"})
+        stores_relation = testing.Relation(
+            endpoint="landscape-server",
+            interface="landscape-task-handler",
+            remote_app_name="landscape-server",
+            remote_app_data={
+                # landscape-server's own PgBouncer address: only reachable
+                # (and correct) from landscape-server's own machine.
+                "host": "localhost",
+                "port": "6432",
+                "user": "landscape",
+                "main": "landscape-standalone-main",
+                "account_1": "landscape-standalone-account-1",
+                "resource_1": "landscape-standalone-resource-1",
+                "sslmode": "disable",
+                "sslrootcert": "/pgbouncer/ca.crt",
+                "secret-id": stores_secret.id,
+            },
+        )
+        state_in = testing.State(
+            relations={task_db_relation, stores_relation},
+            secrets={task_db_secret, stores_secret},
+        )
+
+        ctx.run(ctx.on.relation_changed(stores_relation), state_in)
+
+        set_config = mock_snap.set.call_args[0][0]
+        for prefix in ("main", "account", "resource"):
+            assert set_config[f"landscape.database.{prefix}.host"] == "10.0.0.5"
+            assert set_config[f"landscape.database.{prefix}.port"] == "5432"
+            assert set_config[f"landscape.database.{prefix}.ssl"] == "require"
+            # landscape-server's PgBouncer-side CA cert is meaningless for a
+            # direct PostgreSQL connection and must not be carried over.
+            assert f"landscape.database.{prefix}.ssl-root-cert" not in set_config
+
 
 class TestStatus:
     def test_waiting_without_relations(self, mock_snap: MagicMock):
