@@ -57,6 +57,22 @@ class TestInstallAndLifecycle:
         mock_snap.start.assert_called_once_with(enable=True)
         assert state_out.workload_version == "42"
 
+    def test_start_opens_grpc_port(self, mock_snap: MagicMock):
+        """The start hook opens the gRPC backend port haproxy connects to.
+
+        Mirrors landscape-server's own set_ports pattern, so the gRPC service
+        is reachable through haproxy without an out-of-band `open-port`.
+        """
+        mock_snap.present = True
+        mock_snap.revision = "42"
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        state_out = ctx.run(ctx.on.start(), testing.State())
+
+        assert state_out.opened_ports == {
+            testing.TCPPort(int(landscape_task_handler.DEFAULT_GRPC_PORT))
+        }
+
     def test_upgrade_refreshes_snap(self, mock_snap: MagicMock):
         """The upgrade hook refreshes the snap to the configured channel."""
         mock_snap.present = True

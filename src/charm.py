@@ -203,6 +203,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         unavailable, so the charm self-heals after a charm refresh or snap
         reinstall without needing the relation hooks to re-fire.
         """
+        self._set_ports()
         self._register_landscape_hostname()
         self._provide_haproxy_route_requirements()
         self._publish_outbox_certificates()
@@ -215,6 +216,17 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
 
         if applied:
             self._evaluate_status()
+
+    def _set_ports(self) -> None:
+        """Declare the unit's open ports, mirroring landscape-server's own pattern.
+
+        Opens the gRPC backend port the haproxy-route frontend actually
+        connects to (see ``landscape_task_handler.DEFAULT_GRPC_PORT``, always
+        used since nothing in this charm currently overrides it), so the
+        gRPC service is reachable through haproxy without requiring an
+        out-of-band ``juju exec -- open-port``.
+        """
+        self.unit.set_ports(ops.Port("tcp", int(landscape_task_handler.DEFAULT_GRPC_PORT)))
 
     def _apply_task_db_config(self) -> bool:
         """Apply the task-handler's own database config from the task-db relation.
