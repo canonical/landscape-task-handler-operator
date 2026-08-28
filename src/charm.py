@@ -16,7 +16,7 @@ from charmlibs.interfaces.tls_certificates import (
     TLSCertificatesRequiresV4,
 )
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
-from charms.haproxy.v1.haproxy_route_tcp import HaproxyRouteTcpRequirer, TCPHealthCheckType
+from charms.haproxy.v1.haproxy_route_tcp import HaproxyRouteTcpRequirer
 
 import landscape_task_handler
 
@@ -495,10 +495,6 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             enforce_tls=True,
             tls_terminate=False,
             unit_address=unit_ip,
-            check_interval=2,
-            check_rise=2,
-            check_fall=3,
-            check_type=TCPHealthCheckType.GENERIC,
         )
 
     def _register_landscape_hostname(self) -> None:
