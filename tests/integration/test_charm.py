@@ -172,14 +172,21 @@ def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
         unit=unit,
     ).stdout.strip()
     assert task_db_host, "task-db host is not set; is the task-db relation fully settled?"
+    task_db_ssl = juju.exec(
+        "snap get landscape-task-handler landscape.database.task-handler.ssl",
+        unit=unit,
+    ).stdout.strip()
 
     ls_data = _landscape_server_stores_data(juju, unit)
     ls_host = ls_data.get("host")
     if ls_host in _LOOPBACK_HOSTS:
         # landscape-server is fronted by a loopback pooler (e.g. PgBouncer):
         # the charm should have fallen back to task-db's reachable host/ssl.
+        # task-db's own ssl mode depends on whether postgresql has TLS
+        # configured (see _task_db_params in src/charm.py), so read it rather
+        # than assuming "require".
         expected_host = task_db_host
-        expected_ssl = "require"
+        expected_ssl = task_db_ssl
     else:
         # landscape-server's own published host is already real/reachable:
         # the charm should have preserved it, including its ssl mode as-is.
