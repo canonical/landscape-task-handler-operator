@@ -20,6 +20,10 @@ PGBOUNCER_APP = "pgbouncer"
 LANDSCAPE_SERVER_APP = "landscape-server"
 CERTS_APP = "self-signed-certificates"
 
+# Matches _LOOPBACK_HOSTS in src/charm.py: only these hosts trigger the
+# task-db fallback in _stores_connection_params.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 # The task-handler writes its issued gRPC server certificate material here on
 # `certificate_available` (see landscape_task_handler.CERTS_ACTIVE_DIR).
 SERVER_CERTS_DIR = f"/var/snap/{SNAP_NAME}/common/certs/active"
@@ -75,6 +79,14 @@ def test_snap_is_installed(juju: jubilant.Juju):
     assert SNAP_NAME in task.stdout, f"Snap {SNAP_NAME} not found in output: {task.stdout}"
 
 
+def _deploy_if_missing(juju: jubilant.Juju, app: str, channel: str) -> None:
+    """Deploy ``app`` from ``channel``, unless it's already present in the model."""
+    if app in juju.status().apps:
+        return
+    juju.deploy(app, channel=channel)
+    juju.wait(lambda status: app in status.apps)
+
+
 def test_task_db_relation(juju: jubilant.Juju):
     """Test that the task-handler and postgres charms can be related for the task DB.
 
@@ -82,10 +94,7 @@ def test_task_db_relation(juju: jubilant.Juju):
     (e.g. on a live model where this relation already exists), making this
     safe to run against any model.
     """
-    status = juju.status()
-    if POSTGRES_APP not in status.apps:
-        juju.deploy(POSTGRES_APP, channel="16/stable")
-        juju.wait(lambda status: POSTGRES_APP in status.apps)
+    _deploy_if_missing(juju, POSTGRES_APP, channel="16/stable")
 
     if "task-db" not in juju.status().apps[APP_NAME].relations:
         juju.integrate(f"{APP_NAME}:task-db", POSTGRES_APP)
@@ -99,12 +108,13 @@ def test_task_db_relation(juju: jubilant.Juju):
     assert "task-db" in relations
 
 
-def _deploy_if_missing(juju: jubilant.Juju, app: str, channel: str) -> None:
-    """Deploy ``app`` from ``channel``, unless it's already present in the model."""
-    if app in juju.status().apps:
-        return
-    juju.deploy(app, channel=channel)
-    juju.wait(lambda status: app in status.apps)
+def _landscape_server_stores_data(juju: jubilant.Juju, unit: str) -> dict:
+    """Return the raw `landscape-server` relation databag as seen by ``unit``."""
+    unit_info = juju.show_unit(unit)
+    for relation in unit_info.relation_info:
+        if relation.endpoint == "landscape-server":
+            return relation.app_data
+    pytest.fail(f"{unit} has no landscape-server relation data")
 
 
 def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
@@ -114,7 +124,9 @@ def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
     (skipping any that are already present), relates `pgbouncer` in front of
     `landscape-server` (the real HA topology this fix targets), and confirms
     `landscape-task-handler` ends up with a working main/account/resource
-    connection, not `pgbouncer`'s unreachable loopback address.
+    connection: `task-db`'s reachable host/ssl when `landscape-server`
+    publishes a loopback address, or `landscape-server`'s own published
+    host/ssl otherwise (see `_stores_connection_params` in `src/charm.py`).
     """
     _deploy_if_missing(juju, POSTGRES_APP, channel="16/stable")
     _deploy_if_missing(juju, PGBOUNCER_APP, channel="1/stable")
@@ -129,7 +141,14 @@ def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
         juju.integrate(f"{APP_NAME}:landscape-server", LANDSCAPE_SERVER_APP)
 
     def _relations_ready(status: jubilant.Status) -> bool:
-        return "landscape-server" in status.apps[APP_NAME].relations
+        # Juju relations are added in sequence above, but each settles
+        # independently; check every one added, not just the last, since
+        # there's no guarantee they become visible in the same order.
+        return (
+            "backend-database" in status.apps[PGBOUNCER_APP].relations
+            and "database" in status.apps[LANDSCAPE_SERVER_APP].relations
+            and "landscape-server" in status.apps[APP_NAME].relations
+        )
 
     juju.wait(_relations_ready, timeout=600)
 
@@ -154,6 +173,19 @@ def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
     ).stdout.strip()
     assert task_db_host, "task-db host is not set; is the task-db relation fully settled?"
 
+    ls_data = _landscape_server_stores_data(juju, unit)
+    ls_host = ls_data.get("host")
+    if ls_host in _LOOPBACK_HOSTS:
+        # landscape-server is fronted by a loopback pooler (e.g. PgBouncer):
+        # the charm should have fallen back to task-db's reachable host/ssl.
+        expected_host = task_db_host
+        expected_ssl = "require"
+    else:
+        # landscape-server's own published host is already real/reachable:
+        # the charm should have preserved it, including its ssl mode as-is.
+        expected_host = ls_host
+        expected_ssl = ls_data.get("sslmode", "disable")
+
     for prefix in ("main", "account", "resource"):
         host = juju.exec(
             f"snap get landscape-task-handler landscape.database.{prefix}.host",
@@ -163,10 +195,12 @@ def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
             f"snap get landscape-task-handler landscape.database.{prefix}.ssl",
             unit=unit,
         ).stdout.strip()
-        assert host == task_db_host, (
-            f"{prefix} host {host!r} does not match task-db's reachable host {task_db_host!r}"
+        assert host == expected_host, (
+            f"{prefix} host {host!r} does not match expected {expected_host!r}"
         )
-        assert ssl == "require", f"{prefix} ssl mode was {ssl!r}, expected 'require'"
+        assert ssl == expected_ssl, (
+            f"{prefix} ssl mode {ssl!r} does not match expected {expected_ssl!r}"
+        )
 
 
 def test_certificates_relation(juju: jubilant.Juju):
@@ -180,10 +214,7 @@ def test_certificates_relation(juju: jubilant.Juju):
     integration works end to end. Skips the deploy/relate steps if both are
     already present (e.g. on a live model), making this safe to run anywhere.
     """
-    status = juju.status()
-    if CERTS_APP not in status.apps:
-        juju.deploy(CERTS_APP, channel="1/stable")
-        juju.wait(lambda status: CERTS_APP in status.apps)
+    _deploy_if_missing(juju, CERTS_APP, channel="1/stable")
 
     if "certificates" not in juju.status().apps[APP_NAME].relations:
         juju.integrate(f"{APP_NAME}:certificates", CERTS_APP)

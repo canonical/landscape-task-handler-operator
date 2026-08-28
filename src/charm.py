@@ -309,10 +309,18 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         colocated with that landscape-server unit. In that specific case, if
         this unit already has a real, independently-verified PostgreSQL
         address and SSL mode from its own task-db relation, prefer those
-        instead: they point at the same underlying PostgreSQL deployment,
-        work regardless of placement, and (like task-db) don't need any
-        client cert material for the ``require`` SSL mode PostgreSQL's
-        ``pg_hba.conf`` expects for non-loopback connections.
+        instead: in every deployment topology this charm currently supports
+        (a single shared ``postgresql`` application backing both the shared
+        stores and task-db), they point at the same underlying PostgreSQL
+        deployment, work regardless of placement, and (like task-db) don't
+        need any client cert material for the ``require`` SSL mode
+        PostgreSQL's ``pg_hba.conf`` expects for non-loopback connections.
+        This is a known, accepted limitation, not a guarantee this code
+        enforces: task-db is its own independent relation, and nothing
+        requires it to point at the same PostgreSQL deployment as the shared
+        stores. If a deployment ever relates task-db to a genuinely different
+        PostgreSQL server than the one backing landscape-server's stores,
+        this fallback would substitute the wrong connection details.
 
         If landscape-server's published host is anything other than a
         loopback address, it's already real and directly reachable (either a
