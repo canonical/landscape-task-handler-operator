@@ -218,16 +218,13 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             self._evaluate_status()
 
     def _set_ports(self) -> None:
-        """Declare the unit's open ports, mirroring landscape-server's own pattern.
+        """Declare the gRPC port to the model.
 
-        Opens the gRPC backend port the haproxy-route frontend actually
-        connects to. ``landscape_task_handler.configure_grpc`` accepts a
-        ``port`` argument (defaulting to ``DEFAULT_GRPC_PORT``), but this
-        charm's only call site never overrides it, so ``DEFAULT_GRPC_PORT`` is
-        always the real listen port today. If a future charm config option
-        ever let operators override the gRPC listen port, this method would
-        need updating to open that configured port instead, or it would
-        silently open the wrong one.
+        This makes it externally-accessible by, e.g., haproxy.
+        ``landscape_task_handler.configure_grpc`` accepts a ``port`` argument
+        (defaulting to ``DEFAULT_GRPC_PORT``), but this charm's only call site
+        never overrides it. If a future config option let operators override
+        the gRPC listen port, this method would need updating to match.
         """
         self.unit.set_ports(ops.Port("tcp", int(landscape_task_handler.DEFAULT_GRPC_PORT)))
 
