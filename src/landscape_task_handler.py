@@ -88,7 +88,13 @@ def _install_snap(channel: str, refresh: bool = False) -> None:
 
 
 def configure_task_db(
-    host: str, port: str, user: str, password: str, database: str, ssl: str = "disable"
+    host: str,
+    port: str,
+    user: str,
+    password: str,
+    database: str,
+    ssl: str = "disable",
+    ssl_root_cert: str | None = None,
 ) -> None:
     """Set the task-handler's own database connection parameters in the snap.
 
@@ -101,7 +107,9 @@ def configure_task_db(
     (doing so would cause redundant, back-to-back restarts).
     """
     task_handler_snap = snap.SnapCache()[TASK_HANDLER_SNAP_NAME]
-    config = _database_section(_TASK_DB_PREFIX, host, port, user, password, database, ssl)
+    config = _database_section(
+        _TASK_DB_PREFIX, host, port, user, password, database, ssl, ssl_root_cert=ssl_root_cert
+    )
     _set_snap_config_if_changed(task_handler_snap, config)
 
 

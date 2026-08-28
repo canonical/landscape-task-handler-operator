@@ -235,6 +235,40 @@ class TestTaskDbRelation:
         # The snap's configure hook restarts the services, so the charm must not.
         mock_snap.restart.assert_not_called()
 
+    def test_task_db_uses_ca_cert_when_published(self, mock_snap: MagicMock):
+        """The task-handler's own database connection uses task-db's CA cert."""
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        secret = testing.Secret(
+            tracked_content={"username": "taskuser", "password": "taskpw"},
+        )
+        relation = testing.Relation(
+            endpoint="task-db",
+            interface="postgresql_client",
+            remote_app_name="postgresql",
+            remote_app_data={
+                "database": "task-handler",
+                "endpoints": "10.0.0.5:5432",
+                "username": "taskuser",
+                "password": "taskpw",
+                "secret-user": secret.id,
+                "tls": "True",
+                "tls-ca": "-----BEGIN CERTIFICATE-----\ntask-db-ca\n-----END CERTIFICATE-----",
+            },
+        )
+        state_in = testing.State(relations={relation}, secrets={secret})
+
+        ctx.run(ctx.on.relation_changed(relation), state_in)
+
+        set_config = mock_snap.set.call_args[0][0]
+        assert set_config["landscape.database.task-handler.ssl"] == "require"
+        assert (
+            set_config["landscape.database.task-handler.ssl-root-cert"]
+            == "-----BEGIN CERTIFICATE-----\ntask-db-ca\n-----END CERTIFICATE-----"
+        )
+
 
 class TestStoresRelation:
     def test_stores_fans_out_to_three_sections(self, mock_snap: MagicMock):
@@ -359,6 +393,71 @@ class TestStoresRelation:
             # landscape-server's PgBouncer-side CA cert is meaningless for a
             # direct PostgreSQL connection and must not be carried over.
             assert f"landscape.database.{prefix}.ssl-root-cert" not in set_config
+
+    def test_stores_uses_task_db_ca_cert_when_published(self, mock_snap: MagicMock):
+        """Pass through task-db's own CA cert when falling back to its endpoint.
+
+        postgresql-operator publishes a real ``tls-ca`` on the task-db
+        relation whenever ``postgresql`` has TLS enabled. That's the correct
+        CA for the substituted host (unlike landscape-server's PgBouncer-side
+        cert, which is meaningless here), so it should be carried over as
+        ``ssl-root-cert``.
+        """
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        task_db_secret = testing.Secret(
+            tracked_content={"username": "taskuser", "password": "taskpw"}
+        )
+        task_db_relation = testing.Relation(
+            endpoint="task-db",
+            interface="postgresql_client",
+            remote_app_name="postgresql",
+            remote_app_data={
+                "database": "task-handler",
+                "endpoints": "10.0.0.5:5432",
+                "username": "taskuser",
+                "password": "taskpw",
+                "secret-user": task_db_secret.id,
+                "tls": "True",
+                "tls-ca": "-----BEGIN CERTIFICATE-----\ntask-db-ca\n-----END CERTIFICATE-----",
+            },
+        )
+
+        stores_secret = testing.Secret(tracked_content={"password": "storespw"})
+        stores_relation = testing.Relation(
+            endpoint="landscape-server",
+            interface="landscape-task-handler",
+            remote_app_name="landscape-server",
+            remote_app_data={
+                "host": "localhost",
+                "port": "6432",
+                "user": "landscape",
+                "main": "landscape-standalone-main",
+                "account_1": "landscape-standalone-account-1",
+                "resource_1": "landscape-standalone-resource-1",
+                "sslmode": "disable",
+                "secret-id": stores_secret.id,
+            },
+        )
+        state_in = testing.State(
+            relations={task_db_relation, stores_relation},
+            secrets={task_db_secret, stores_secret},
+        )
+
+        ctx.run(ctx.on.relation_changed(stores_relation), state_in)
+
+        set_config = mock_snap.set.call_args[0][0]
+        for prefix in ("main", "account", "resource"):
+            assert (
+                set_config[f"landscape.database.{prefix}.ssl-root-cert"]
+                == "-----BEGIN CERTIFICATE-----\ntask-db-ca\n-----END CERTIFICATE-----"
+            )
+            # No client cert/key: postgresql-operator only ever configures
+            # password-based (scram-sha-256/md5) client auth, never cert auth.
+            assert f"landscape.database.{prefix}.ssl-cert" not in set_config
+            assert f"landscape.database.{prefix}.ssl-key" not in set_config
 
     def test_stores_keeps_own_host_when_landscape_server_is_not_loopback(
         self, mock_snap: MagicMock

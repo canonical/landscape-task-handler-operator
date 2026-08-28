@@ -16,7 +16,7 @@ from charmlibs.interfaces.tls_certificates import (
     TLSCertificatesRequiresV4,
 )
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
-from charms.haproxy.v1.haproxy_route_tcp import HaproxyRouteTcpRequirer
+from charms.haproxy.v1.haproxy_route_tcp import HaproxyRouteTcpRequirer, TCPHealthCheckType
 
 import landscape_task_handler
 
@@ -237,10 +237,12 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         params = self._task_db_params()
         if params is None:
             return True
-        host, port, username, password, database, ssl = params
+        host, port, username, password, database, ssl, ssl_ca = params
         self.unit.status = ops.MaintenanceStatus("Configuring task database...")
         try:
-            landscape_task_handler.configure_task_db(host, port, username, password, database, ssl)
+            landscape_task_handler.configure_task_db(
+                host, port, username, password, database, ssl, ssl_root_cert=ssl_ca
+            )
         except (snap.SnapError, snap.SnapNotFoundError):
             logger.exception("failed to configure task-handler database")
             self.unit.status = ops.BlockedStatus("Failed to configure task database")
@@ -324,15 +326,20 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         instead: in every deployment topology this charm currently supports
         (a single shared ``postgresql`` application backing both the shared
         stores and task-db), they point at the same underlying PostgreSQL
-        deployment, work regardless of placement, and (like task-db) don't
-        need any client cert material for the ``require`` SSL mode
-        PostgreSQL's ``pg_hba.conf`` expects for non-loopback connections.
-        This is a known, accepted limitation, not a guarantee this code
-        enforces: task-db is its own independent relation, and nothing
-        requires it to point at the same PostgreSQL deployment as the shared
-        stores. If a deployment ever relates task-db to a genuinely different
-        PostgreSQL server than the one backing landscape-server's stores,
-        this fallback would substitute the wrong connection details.
+        deployment and work regardless of placement. task-db's own CA
+        certificate (published whenever ``postgresql`` has TLS enabled) is
+        passed through as ``ssl_root_cert``; no client cert/key is used
+        because ``postgresql-operator`` only ever configures password-based
+        (``scram-sha-256``/``md5``) client authentication, never certificate
+        auth, so a client cert/key is never required for this connection in
+        the deployments this charm targets. This is a known, accepted
+        limitation, not a guarantee this code enforces: task-db is its own
+        independent relation, and nothing requires it to point at the same
+        PostgreSQL deployment as the shared stores, or to use the same
+        client-auth method. If a deployment ever relates task-db to a
+        genuinely different PostgreSQL server, or one configured for
+        certificate-based client auth, this fallback would substitute the
+        wrong connection details.
 
         If landscape-server's published host is anything other than a
         loopback address, it's already real and directly reachable (either a
@@ -346,8 +353,8 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         if host in _LOOPBACK_HOSTS:
             task_db_params = self._task_db_params()
             if task_db_params is not None:
-                task_db_host, task_db_port, _, _, _, ssl = task_db_params
-                return task_db_host, task_db_port, ssl, None, None, None
+                task_db_host, task_db_port, _, _, _, ssl, ssl_ca = task_db_params
+                return task_db_host, task_db_port, ssl, ssl_ca, None, None
         return (
             host,
             app_data.get("port"),
@@ -399,8 +406,8 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             return False
         return True
 
-    def _task_db_params(self) -> tuple[str, str, str, str, str, str] | None:
-        """Read (host, port, user, password, database, ssl) from the task-db relation.
+    def _task_db_params(self) -> tuple[str, str, str, str, str, str, str | None] | None:
+        """Read (host, port, user, password, database, ssl, ssl_ca) from the task-db relation.
 
         Reads the current relation data (not an event) so it can be used from the
         reconcile path too. Returns None when the relation or its credentials are
@@ -411,7 +418,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             return None
         data = self.task_db.fetch_relation_data(
             relation_ids=[relation.id],
-            fields=["endpoints", "username", "password", "database", "tls"],
+            fields=["endpoints", "username", "password", "database", "tls", "tls-ca"],
         ).get(relation.id, {})
 
         endpoints = data.get("endpoints")
@@ -424,7 +431,8 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         endpoint = endpoints.split(",")[0]
         host, port = endpoint.split(":") if ":" in endpoint else (endpoint, "5432")
         ssl = "require" if str(data.get("tls")).lower() == "true" else "disable"
-        return host, port, username, password, database, ssl
+        ssl_ca = data.get("tls-ca") or None
+        return host, port, username, password, database, ssl, ssl_ca
 
     def _on_landscape_server_broken(self, event: ops.RelationBrokenEvent) -> None:
         """Surface that the task-handler can no longer process its tasks."""
@@ -484,6 +492,10 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             enforce_tls=True,
             tls_terminate=False,
             unit_address=unit_ip,
+            check_interval=2,
+            check_rise=2,
+            check_fall=3,
+            check_type=TCPHealthCheckType.GENERIC,
         )
 
     def _register_landscape_hostname(self) -> None:
