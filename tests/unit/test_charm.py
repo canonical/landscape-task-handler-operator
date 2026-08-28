@@ -1455,11 +1455,13 @@ class TestOutboxCertPublishingBranches:
         ctx = testing.Context(LandscapeTaskHandlerCharm)
         bundle = {"ca-cert": "CA-PEM", "client-cert": "CLIENT-PEM", "client-key": "CLIENT-KEY-PEM"}
         secret = testing.Secret(tracked_content=bundle, owner="app")
-        stores = self._stores_with_local(**{
-            "certs-secret-id": secret.id,
-            "certs-revision": "3",
-            "grpc-address": "old",
-        })
+        stores = self._stores_with_local(
+            **{
+                "certs-secret-id": secret.id,
+                "certs-revision": "3",
+                "grpc-address": "old",
+            }
+        )
         state_in = testing.State(leader=True, relations={stores}, secrets={secret})
 
         state_out = ctx.run(ctx.on.leader_elected(), state_in)
@@ -1487,10 +1489,12 @@ class TestOutboxCertPublishingBranches:
         """A dangling secret-id is recreated."""
         self._patch_client_cert(monkeypatch)
         ctx = testing.Context(LandscapeTaskHandlerCharm)
-        stores = self._stores_with_local(**{
-            "certs-secret-id": "secret:doesnotexist",
-            "certs-revision": "3",
-        })
+        stores = self._stores_with_local(
+            **{
+                "certs-secret-id": "secret:doesnotexist",
+                "certs-revision": "3",
+            }
+        )
         state_in = testing.State(leader=True, relations={stores})
 
         state_out = ctx.run(ctx.on.leader_elected(), state_in)
