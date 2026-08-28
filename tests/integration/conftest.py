@@ -9,12 +9,47 @@ import pathlib
 import jubilant
 import pytest
 
+APP_NAME = "landscape-task-handler"
+
+USE_HOST_JUJU_MODEL = os.getenv("TASK_HANDLER_USE_HOST_JUJU_MODEL", False)
+"""
+If set, attach to the current Juju model on the host instead of creating a
+temporary one, and only deploy charms/relations that aren't already present.
+Useful for iterating against a real, already-deployed environment (e.g. a
+live stg/prod-like model) without redeploying everything on each run.
+"""
+
+
+def _host_juju() -> jubilant.Juju:
+    """Return a reference to the current host Juju model.
+
+    Runs a light check that the charm under test is already deployed there,
+    since the test suite otherwise assumes it exists before adding relations
+    to it.
+    """
+    juju = jubilant.Juju()
+    model_applications = juju.status().apps
+    assert APP_NAME in model_applications, (
+        f"{APP_NAME} not found in the current model; deploy it first or unset "
+        "TASK_HANDLER_USE_HOST_JUJU_MODEL to use a temporary model instead."
+    )
+    return juju
+
 
 @pytest.fixture(scope="module")
 def juju():
-    """Create a temporary Juju model for the test run and destroy it after."""
-    with jubilant.temp_model() as juju:
-        yield juju
+    """Return a Juju model for the test run.
+
+    Uses the current host model (without destroying anything in it
+    afterwards) when ``TASK_HANDLER_USE_HOST_JUJU_MODEL`` is set; otherwise
+    creates a temporary model and destroys it after the test module
+    finishes.
+    """
+    if USE_HOST_JUJU_MODEL:
+        yield _host_juju()
+    else:
+        with jubilant.temp_model() as juju:
+            yield juju
 
 
 @pytest.fixture(scope="session")

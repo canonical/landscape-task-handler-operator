@@ -35,6 +35,11 @@ CLIENT_CERT_COMMON_NAME = "landscape-outbox"
 STORES_SECRET_ID_KEY = "secret-id"
 STORES_PASSWORD_FIELD = "password"
 
+# Addresses that indicate landscape-server's published stores host is its own
+# PgBouncer subordinate (loopback-only), rather than a real, directly
+# reachable PostgreSQL/pooler address. See _stores_connection_params.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 LANDSCAPE_HOSTNAME_KEY = "hostname"
 
 GRPC_ADDRESS_KEY = "grpc-address"
@@ -198,6 +203,7 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         unavailable, so the charm self-heals after a charm refresh or snap
         reinstall without needing the relation hooks to re-fire.
         """
+        self._set_ports()
         self._register_landscape_hostname()
         self._provide_haproxy_route_requirements()
         self._publish_outbox_certificates()
@@ -210,6 +216,17 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
 
         if applied:
             self._evaluate_status()
+
+    def _set_ports(self) -> None:
+        """Declare the gRPC port to the model.
+
+        This makes it externally-accessible by, e.g., haproxy.
+        ``landscape_task_handler.configure_grpc`` accepts a ``port`` argument
+        (defaulting to ``DEFAULT_GRPC_PORT``), but this charm's only call site
+        never overrides it. If a future config option let operators override
+        the gRPC listen port, this method would need updating to match.
+        """
+        self.unit.set_ports(ops.Port("tcp", int(landscape_task_handler.DEFAULT_GRPC_PORT)))
 
     def _apply_task_db_config(self) -> bool:
         """Apply the task-handler's own database config from the task-db relation.
@@ -246,16 +263,13 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             return True
         app_data = relation.data[relation.app]
 
-        host = app_data.get("host")
-        port = app_data.get("port")
+        host, port, ssl, ssl_root_cert, ssl_cert, ssl_key = self._stores_connection_params(
+            app_data
+        )
         user = app_data.get("user")
         main = app_data.get("main")
         account = app_data.get("account_1") or app_data.get("account-1")
         resource = app_data.get("resource_1") or app_data.get("resource-1")
-        ssl = app_data.get("sslmode", "disable")
-        ssl_root_cert = app_data.get("sslrootcert")
-        ssl_cert = app_data.get("sslcert")
-        ssl_key = app_data.get("sslkey")
 
         if (
             host is None
@@ -292,6 +306,63 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
             self.unit.status = ops.BlockedStatus("Failed to configure Landscape stores")
             return False
         return True
+
+    def _stores_connection_params(
+        self, app_data
+    ) -> tuple[str | None, str | None, str, str | None, str | None, str | None]:
+        """Return connection params for the shared Landscape stores.
+
+        Returns (host, port, ssl, ssl_root_cert, ssl_cert, ssl_key).
+
+        landscape-server publishes the host/port/ssl-mode/certs it itself uses
+        to reach the stores. Whenever it fronts them with PgBouncer, that's a
+        loopback address (``localhost``/``127.0.0.1``/``::1``) with SSL
+        disabled, which is only reachable and correct from a machine
+        colocated with that landscape-server unit. In that specific case, if
+        this unit already has a real, independently-verified PostgreSQL
+        address and SSL mode from its own task-db relation, prefer those
+        instead: in every deployment topology this charm currently supports
+        (a single shared ``postgresql`` application backing both the shared
+        stores and task-db), they point at the same underlying PostgreSQL
+        deployment, work regardless of placement, and (like task-db) don't
+        need any client cert material for the ``require`` SSL mode
+        PostgreSQL's ``pg_hba.conf`` expects for non-loopback connections.
+        This is a known, accepted limitation, not a guarantee this code
+        enforces: task-db is its own independent relation, and nothing
+        requires it to point at the same PostgreSQL deployment as the shared
+        stores. If a deployment ever relates task-db to a genuinely different
+        PostgreSQL server than the one backing landscape-server's stores,
+        this fallback would substitute the wrong connection details.
+
+        No SSL root cert is passed through for this fallback (or for
+        task-db's own connection, see ``_task_db_params``): PostgreSQL's
+        ``sslmode=require`` only demands an encrypted transport, and
+        ``postgresql-operator`` only configures password-based
+        (``scram-sha-256``/``md5``) client authentication, never certificate
+        auth, so a CA cert isn't required for the connection to succeed here.
+
+        If landscape-server's published host is anything other than a
+        loopback address, it's already real and directly reachable (either a
+        direct PostgreSQL connection, or some other externally-reachable
+        pooler), so its published values are used as-is: task-db's endpoint
+        isn't guaranteed to point at the same PostgreSQL deployment, and its
+        SSL mode/cert policy isn't necessarily what that other connection
+        requires.
+        """
+        host = app_data.get("host")
+        if host in _LOOPBACK_HOSTS:
+            task_db_params = self._task_db_params()
+            if task_db_params is not None:
+                task_db_host, task_db_port, _, _, _, ssl = task_db_params
+                return task_db_host, task_db_port, ssl, None, None, None
+        return (
+            host,
+            app_data.get("port"),
+            app_data.get("sslmode", "disable"),
+            app_data.get("sslrootcert"),
+            app_data.get("sslcert"),
+            app_data.get("sslkey"),
+        )
 
     def _apply_grpc_certificates(self) -> bool:
         """Provision the gRPC mTLS certificates and point the snap at them.
@@ -341,6 +412,13 @@ class LandscapeTaskHandlerCharm(ops.CharmBase):
         Reads the current relation data (not an event) so it can be used from the
         reconcile path too. Returns None when the relation or its credentials are
         not yet available.
+
+        No CA cert is read here even though postgresql-operator also publishes
+        one (``tls-ca``) on this relation whenever ``postgresql`` has TLS
+        enabled: ``sslmode=require`` only demands an encrypted transport, and
+        postgresql-operator only ever configures password-based
+        (``scram-sha-256``/``md5``) client authentication, never certificate
+        auth, so a CA cert isn't required for this connection to succeed.
         """
         relation = self.model.get_relation(TASK_DB_RELATION)
         if relation is None or relation.app is None:
