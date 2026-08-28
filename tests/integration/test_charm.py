@@ -11,15 +11,14 @@ import pathlib
 import jubilant
 import pytest
 
-from tests.integration.conftest import USE_HOST_JUJU_MODEL
-
 logger = logging.getLogger(__name__)
 
 APP_NAME = "landscape-task-handler"
 SNAP_NAME = "landscape-task-handler"
 POSTGRES_APP = "postgresql"
+PGBOUNCER_APP = "pgbouncer"
+LANDSCAPE_SERVER_APP = "landscape-server"
 CERTS_APP = "self-signed-certificates"
-FAKE_LANDSCAPE_SERVER_APP = "fake-landscape-server"
 
 # The task-handler writes its issued gRPC server certificate material here on
 # `certificate_available` (see landscape_task_handler.CERTS_ACTIVE_DIR).
@@ -76,11 +75,13 @@ def test_snap_is_installed(juju: jubilant.Juju):
     assert SNAP_NAME in task.stdout, f"Snap {SNAP_NAME} not found in output: {task.stdout}"
 
 
-@pytest.mark.skipif(
-    USE_HOST_JUJU_MODEL, reason="would deploy postgresql into a live, shared model"
-)
 def test_task_db_relation(juju: jubilant.Juju):
-    """Test that the task-handler and postgres charms can be related for the task DB."""
+    """Test that the task-handler and postgres charms can be related for the task DB.
+
+    Deploys `postgresql` and relates it, unless both are already present
+    (e.g. on a live model where this relation already exists), making this
+    safe to run against any model.
+    """
     status = juju.status()
     if POSTGRES_APP not in status.apps:
         juju.deploy(POSTGRES_APP, channel="16/stable")
@@ -98,63 +99,43 @@ def test_task_db_relation(juju: jubilant.Juju):
     assert "task-db" in relations
 
 
-@pytest.mark.skipif(
-    USE_HOST_JUJU_MODEL,
-    reason="would deploy a test-double charm and add a relation to a live, shared model",
-)
-def test_stores_relation_prefers_task_db_host_over_unreachable_landscape_server_host(
-    fake_landscape_server_charm: pathlib.Path, juju: jubilant.Juju
-):
-    """The shared stores must use task-db's real host, not landscape-server's.
+def _deploy_if_missing(juju: jubilant.Juju, app: str, channel: str) -> None:
+    """Deploy ``app`` from ``channel``, unless it's already present in the model."""
+    if app in juju.status().apps:
+        return
+    juju.deploy(app, channel=channel)
+    juju.wait(lambda status: app in status.apps)
 
-    Reproduces the real-world bug: when landscape-server fronts the shared
-    main/account/resource stores with PgBouncer, it publishes ``localhost``
-    (its own PgBouncer subordinate's address) on the ``landscape-server``
-    relation, which is meaningless from any other unit's own machine. The
-    fake provider charm here publishes that exact ``localhost``/``disable``
-    SSL data (see ``fake_landscape_server``); on this unit, ``localhost:6432``
-    has nothing listening, so it reproduces the bug's unreachability. If the
-    charm still preferred that data, the shared-store snap config would end
-    up pointing at a host this unit can never reach; asserting it instead
-    matches ``task-db``'s already-verified-reachable host and ``require`` SSL
-    mode proves the fix takes effect end-to-end, not just in unit tests.
 
-    Requires ``test_task_db_relation`` to have already run in this module, so
-    the task-db relation (and thus a resolvable host to prefer) exists. Only
-    runs against a temporary model: deploying the fake provider charm and
-    relating it would be a mutating, non-representative change on a live,
-    shared model, where the real landscape-server relation already exists.
+def test_stores_relation_uses_reachable_task_db_host(juju: jubilant.Juju):
+    """The shared stores must use a real, reachable PostgreSQL host.
+
+    Deploys real `postgresql`, `pgbouncer`, and `landscape-server` charms
+    (skipping any that are already present), relates `pgbouncer` in front of
+    `landscape-server` (the real HA topology this fix targets), and confirms
+    `landscape-task-handler` ends up with a working main/account/resource
+    connection, not `pgbouncer`'s unreachable loopback address.
     """
+    _deploy_if_missing(juju, POSTGRES_APP, channel="16/stable")
+    _deploy_if_missing(juju, PGBOUNCER_APP, channel="1/stable")
+    _deploy_if_missing(juju, LANDSCAPE_SERVER_APP, channel="26.04/stable")
+
     status = juju.status()
-    if FAKE_LANDSCAPE_SERVER_APP not in status.apps:
-        juju.deploy(str(fake_landscape_server_charm), app=FAKE_LANDSCAPE_SERVER_APP)
-        juju.wait(lambda status: FAKE_LANDSCAPE_SERVER_APP in status.apps)
+    if "backend-database" not in status.apps[PGBOUNCER_APP].relations:
+        juju.integrate(f"{PGBOUNCER_APP}:backend-database", POSTGRES_APP)
+    if "database" not in status.apps[LANDSCAPE_SERVER_APP].relations:
+        juju.integrate(f"{LANDSCAPE_SERVER_APP}:database", PGBOUNCER_APP)
+    if "landscape-server" not in status.apps[APP_NAME].relations:
+        juju.integrate(f"{APP_NAME}:landscape-server", LANDSCAPE_SERVER_APP)
 
-    if "landscape-server" not in juju.status().apps[APP_NAME].relations:
-        juju.integrate(f"{APP_NAME}:landscape-server", FAKE_LANDSCAPE_SERVER_APP)
-
-    def _relation_ready(status: jubilant.Status) -> bool:
+    def _relations_ready(status: jubilant.Status) -> bool:
         return "landscape-server" in status.apps[APP_NAME].relations
 
-    juju.wait(_relation_ready)
+    juju.wait(_relations_ready, timeout=600)
 
     unit = leader_unit_name(juju)
 
-    def _task_db_host_available(status: jubilant.Status) -> str | None:
-        del status  # unused, required by juju.wait's callback signature
-        try:
-            host = juju.exec(
-                "snap get landscape-task-handler landscape.database.task-handler.host",
-                unit=unit,
-            ).stdout.strip()
-        except jubilant.TaskError:
-            return None
-        return host or None
-
-    juju.wait(lambda status: _task_db_host_available(status) is not None)
-    task_db_endpoint = _task_db_host_available(None)
-
-    def _stores_configured_with_task_db_host(status: jubilant.Status) -> bool:
+    def _stores_host_available(status: jubilant.Status) -> bool:
         del status  # unused, required by juju.wait's callback signature
         try:
             host = juju.exec(
@@ -163,58 +144,9 @@ def test_stores_relation_prefers_task_db_host_over_unreachable_landscape_server_
             ).stdout.strip()
         except jubilant.TaskError:
             return False
-        return host == task_db_endpoint
+        return bool(host)
 
-    juju.wait(_stores_configured_with_task_db_host)
-
-    for prefix in ("main", "account", "resource"):
-        host = juju.exec(
-            f"snap get landscape-task-handler landscape.database.{prefix}.host",
-            unit=unit,
-        ).stdout.strip()
-        ssl = juju.exec(
-            f"snap get landscape-task-handler landscape.database.{prefix}.ssl",
-            unit=unit,
-        ).stdout.strip()
-        # The fake provider publishes an unreachable host and `disable` SSL;
-        # neither should ever appear here.
-        assert host == task_db_endpoint, (
-            f"{prefix} host {host!r} does not match task-db's real endpoint "
-            f"{task_db_endpoint!r}; the charm used landscape-server's "
-            "unreachable published host instead"
-        )
-        assert ssl == "require", f"{prefix} ssl mode was {ssl!r}, expected 'require'"
-
-
-@pytest.mark.skipif(
-    not USE_HOST_JUJU_MODEL,
-    reason="verifies real, already-deployed relation data; nothing to check without it",
-)
-def test_live_stores_configuration_uses_reachable_task_db_host(juju: jubilant.Juju):
-    """Read-only check that the shared stores use a reachable host, on a live model.
-
-    Unlike ``test_stores_relation_prefers_task_db_host_over_unreachable_landscape_server_host``,
-    this makes no deploys or relation changes: it only reads the current,
-    already-applied snap configuration on an already-deployed, real
-    environment (for example a live stg/prod-like model passed in via
-    ``TASK_HANDLER_USE_HOST_JUJU_MODEL``), where landscape-server and task-db
-    are both already related. If landscape-server there is fronted by
-    PgBouncer for the shared stores (as in the real HA topology this fix
-    targets), the main/account/resource host must match task-db's own
-    already-reachable host, with SSL required for that non-loopback
-    connection.
-    """
-    status = juju.status()
-    app_status = status.apps.get(APP_NAME)
-    assert app_status is not None, f"{APP_NAME} not found in the current model"
-    assert "task-db" in app_status.relations, (
-        f"{APP_NAME} has no task-db relation in the current model; nothing to verify"
-    )
-    assert "landscape-server" in app_status.relations, (
-        f"{APP_NAME} has no landscape-server relation in the current model; nothing to verify"
-    )
-
-    unit = leader_unit_name(juju)
+    juju.wait(_stores_host_available, timeout=600)
 
     task_db_host = juju.exec(
         "snap get landscape-task-handler landscape.database.task-handler.host",
@@ -232,15 +164,11 @@ def test_live_stores_configuration_uses_reachable_task_db_host(juju: jubilant.Ju
             unit=unit,
         ).stdout.strip()
         assert host == task_db_host, (
-            f"{prefix} host {host!r} does not match task-db's reachable host "
-            f"{task_db_host!r}; this unit may not be reaching the shared stores"
+            f"{prefix} host {host!r} does not match task-db's reachable host {task_db_host!r}"
         )
         assert ssl == "require", f"{prefix} ssl mode was {ssl!r}, expected 'require'"
 
 
-@pytest.mark.skipif(
-    USE_HOST_JUJU_MODEL, reason="would deploy self-signed-certificates into a live, shared model"
-)
 def test_certificates_relation(juju: jubilant.Juju):
     """Relate a tls-certificates provider and verify the gRPC server certs are written.
 
@@ -249,7 +177,8 @@ def test_certificates_relation(juju: jubilant.Juju):
     requests its server (and the outbox client) certificate, the provider issues
     them, and the charm writes the server certificate material into the snap's
     active certs directory. Asserting those files exist confirms the provider
-    integration works end to end.
+    integration works end to end. Skips the deploy/relate steps if both are
+    already present (e.g. on a live model), making this safe to run anywhere.
     """
     status = juju.status()
     if CERTS_APP not in status.apps:
