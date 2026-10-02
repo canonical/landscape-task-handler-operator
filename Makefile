@@ -15,7 +15,7 @@ coverage:
 .PHONY: prepare-tics-analysis
 prepare-tics-analysis: coverage
 	mkdir -p .cover
-	cp coverage.xml .cover/cobertura.xml
+	mv coverage.xml .cover/cobertura.xml
 
 # integration tests
 .PHONY: integration-test
