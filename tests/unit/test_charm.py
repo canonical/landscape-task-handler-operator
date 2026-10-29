@@ -430,6 +430,44 @@ class TestStoresRelation:
             assert set_config[f"landscape.database.{prefix}.ssl"] == "require"
             assert set_config[f"landscape.database.{prefix}.ssl-root-cert"] == "/direct/ca.crt"
 
+    def test_stores_keeps_loopback_host_without_task_db(self, mock_snap: MagicMock):
+        """Fall back to landscape-server's loopback host when task-db isn't available.
+
+        Without a task-db relation there's no independently-verified endpoint
+        to substitute, so landscape-server's published values are used as-is.
+        """
+        mock_snap.present = True
+        mock_snap.get.return_value = None
+        ctx = testing.Context(LandscapeTaskHandlerCharm)
+
+        stores_secret = testing.Secret(tracked_content={"password": "storespw"})
+        stores_relation = testing.Relation(
+            endpoint="landscape-server",
+            interface="landscape-task-handler",
+            remote_app_name="landscape-server",
+            remote_app_data={
+                "host": "localhost",
+                "port": "6432",
+                "user": "landscape",
+                "main": "landscape-standalone-main",
+                "account_1": "landscape-standalone-account-1",
+                "resource_1": "landscape-standalone-resource-1",
+                "sslmode": "disable",
+                "sslrootcert": "/pgbouncer/ca.crt",
+                "secret-id": stores_secret.id,
+            },
+        )
+        state_in = testing.State(relations={stores_relation}, secrets={stores_secret})
+
+        ctx.run(ctx.on.relation_changed(stores_relation), state_in)
+
+        set_config = mock_snap.set.call_args[0][0]
+        for prefix in ("main", "account", "resource"):
+            assert set_config[f"landscape.database.{prefix}.host"] == "localhost"
+            assert set_config[f"landscape.database.{prefix}.port"] == "6432"
+            assert set_config[f"landscape.database.{prefix}.ssl"] == "disable"
+            assert set_config[f"landscape.database.{prefix}.ssl-root-cert"] == "/pgbouncer/ca.crt"
+
 
 class TestStatus:
     def test_waiting_without_relations(self, mock_snap: MagicMock):
