@@ -25,11 +25,13 @@ permissions:
 # the "Docs release notes (shared PR)" section below).
 checkout:
   - fetch-depth: 0
+  # canonical/landscape-documentation is public, so this checkout needs no
+  # token (and setting one would leak it onto the primary-repo checkout in the
+  # safe-output jobs). Only the push-to-pull-request-branch handler keeps a
+  # LANDSCAPE_DOCS_TOKEN override, because pushing still needs it.
   - repository: canonical/landscape-documentation
     path: ./landscape-documentation
     fetch: ["*"]
-    # Only used to fetch refs at setup; contents-read on the docs repo is enough.
-    github-token: ${{ secrets.LANDSCAPE_DOCS_TOKEN }}
 
 engine:
   id: copilot
@@ -55,7 +57,8 @@ safe-outputs:
     team-reviewers: [canonical/landscape]
     draft: false
     if-no-changes: ignore
-    max: 2
+    # Exactly one own-repo PR per run; docs edits go through the push handler.
+    max: 1
     preserve-branch-name: true
     recreate-ref: true
     # Own-repo PRs only ever edit CHANGELOG.md; the handler rejects any other
