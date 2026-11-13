@@ -1,5 +1,5 @@
 ---
-# Biweekly changelog PR bot (GitHub Agentic Workflow).
+# Weekly changelog PR bot (GitHub Agentic Workflow).
 #
 # This is the gh-aw SOURCE file. After editing, regenerate the compiled
 # GitHub Actions workflow with:
@@ -9,10 +9,8 @@
 # and commit the generated `.github/workflows/changelog-bot.lock.yml` alongside it.
 
 on:
-  # Cron cannot express "every other Saturday", so we fire every Saturday at
-  # around 12:00 UTC and the prompt gates on ISO-week parity (see the body below).
   schedule: weekly on saturday around 12:00 UTC
-  # Allow maintainers to trigger a run on demand (ignores the biweekly gate).
+  # Allow maintainers to trigger a run on demand.
   workflow_dispatch:
 
 permissions:
@@ -86,24 +84,15 @@ safe-outputs:
     max: 1
 ---
 
-# Biweekly changelog update
+# Weekly changelog update
 
 You maintain the changelog for the landscape-task-handler charm. Your job is to draft a new changelog section summarizing recent user-facing changes and open a pull request with it.
-
-## Biweekly gate
-
-This workflow is scheduled every Saturday but should only act every **other** Saturday. Releases publish on **odd** ISO weeks.
-
-This run was triggered by the `${{ github.event_name }}` event. Use that value literally to decide whether the gate applies:
-
-1. If the triggering event is `workflow_dispatch`, always proceed regardless of the week number (manual runs bypass the biweekly gate entirely).
-2. Otherwise (a `schedule` run), run `date +%V` to get the current ISO week number. If that week number is **even**, stop immediately and make no changes — do not open a pull request. Only proceed on **odd** weeks.
 
 ## Gather the commits
 
 This charm has no versioned releases in the repository: charm releases are Charmhub revisions assigned at publish time, so changelog sections are dated, not versioned. There are no git tags to anchor against. The changelog lives at `CHANGELOG.md` in the repository root; this bot creates it on its first run that finds user-facing commits.
 
-1. The scan window is time-based: list the commits from the last four weeks with `git log --since="4 weeks ago" --no-merges --pretty=%H%x09%s`. `main` is squash-merged, so each merged PR is a single commit on this list. Do NOT anchor on the last commit that touched `CHANGELOG.md`: a bot changelog PR that is still open (or was merged late) makes that anchor unreliable, silently double-filing or skipping commits. Four weeks against a biweekly schedule gives two weeks of overlap with the previous run, so omissions leapfrogged by later merges are still caught; the deduplication rules below prevent double-filing.
+1. The scan window is time-based: list the commits from the last four weeks with `git log --since="4 weeks ago" --no-merges --pretty=%H%x09%s`. `main` is squash-merged, so each merged PR is a single commit on this list. Do NOT anchor on the last commit that touched `CHANGELOG.md`: a bot changelog PR that is still open (or was merged late) makes that anchor unreliable, silently double-filing or skipping commits. Four weeks against a weekly schedule gives three weeks of overlap with the previous run, so omissions leapfrogged by later merges are still caught; the deduplication rules below prevent double-filing.
 2. Skip any commit whose subject has no trailing pull request reference ` (#1234)`. Such commits cannot carry the `(#<N>)` marker the deduplication relies on, so they can never be filed safely; if one looks user-facing, mention it in the PR body under `Changelog entries to review` instead of adding it to the changelog.
 3. Deduplicate the rest by pull request number. For each commit, extract its PR number `<N>` from the trailing ` (#1234)` reference in the subject. Match the FULL number wherever you search — `#123` must not match `#1234`. Skip the commit if EITHER of the following holds:
    a. Its own commit documented itself: run `git show --name-only --format= <commit>`; if `CHANGELOG.md` is among the paths, run `git show <commit> -- CHANGELOG.md` and check whether the diff adds a line containing the exact reference `#<N>`. A contributor who wrote their own changelog bullet counts as covered — do not add a second one.
