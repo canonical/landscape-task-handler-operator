@@ -69,6 +69,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+  # gh-aw's install_copilot_cli.sh uses --prefer-toolcache, which does not
+  # land the binary on PATH on this self-hosted runner image, so the
+  # threat-detection step exits 127. Install @github/copilot globally with
+  # npm in a detection pre-step so the binary resolves.
+  detection:
+    pre-steps:
+      - name: Install GitHub Copilot CLI
+        run: |
+          npm install -g @github/copilot@1.0.103
+          copilot --version
 
 # The default checkout is shallow (fetch-depth 1) with no tags, which makes the
 # agent see only the latest commit. Fetch full history so it can scan the
