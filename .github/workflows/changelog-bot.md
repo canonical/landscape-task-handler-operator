@@ -13,6 +13,12 @@ on:
   # Allow maintainers to trigger a run on demand.
   workflow_dispatch:
 
+# Run on the Canonical self-hosted fleet. The agent and threat-detection jobs
+# need Docker/AWF and so target the noble/amd64 fleet; the framework and
+# safe_outputs jobs use the bare self-hosted label.
+runs-on: [self-hosted, noble, amd64]
+runs-on-slim: self-hosted
+
 permissions:
   contents: read
 
@@ -60,6 +66,13 @@ tools:
 # changelog PR and the cross-repo docs push with a single credential.
 safe-outputs:
   github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
+  # The safe_outputs job runs the framework's output handlers, not the agent,
+  # so the bare self-hosted label is enough.
+  runs-on: self-hosted
+  # Threat detection runs the AWF sandbox and needs Docker, so it targets the
+  # noble/amd64 fleet alongside the agent job.
+  threat-detection:
+    runs-on: [self-hosted, noble, amd64]
   create-pull-request:
     title-prefix: "build: "
     labels: [changelog, automation]
