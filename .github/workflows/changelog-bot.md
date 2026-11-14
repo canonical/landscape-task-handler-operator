@@ -120,6 +120,7 @@ safe-outputs:
   # Threat detection runs the AWF sandbox and needs Docker, so it targets the
   # noble/amd64 fleet alongside the agent job.
   threat-detection:
+    engine: copilot
     runs-on: [self-hosted, noble, amd64]
   create-pull-request:
     title-prefix: "build: "
