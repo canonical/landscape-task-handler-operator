@@ -77,8 +77,11 @@ jobs:
     pre-steps:
       - name: Install GitHub Copilot CLI
         run: |
+          export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+          mkdir -p "$NPM_CONFIG_PREFIX"
           npm install -g @github/copilot@1.0.103
-          copilot --version
+          echo "$NPM_CONFIG_PREFIX/bin" >> "$GITHUB_PATH"
+          "$NPM_CONFIG_PREFIX/bin/copilot" --version
 
 # The default checkout is shallow (fetch-depth 1) with no tags, which makes the
 # agent see only the latest commit. Fetch full history so it can scan the
