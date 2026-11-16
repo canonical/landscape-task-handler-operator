@@ -114,10 +114,10 @@ checkout:
 engine:
   id: pi
   # Inference runs on OpenRouter via the pi engine. The vendored model id
-  # (moonshotai/kimi-k3) requires gh-aw v1.3.0+: earlier compilers reject the
-  # two-slash form under the model-identifier grammar (github/gh-aw#77514,
-  # fixed by #77562). OPENROUTER_API_KEY supplies the credential.
-  model: openrouter/moonshotai/kimi-k3
+  # requires gh-aw v1.3.0+: earlier compilers reject the two-slash form under
+  # the model-identifier grammar (github/gh-aw#77514, fixed by #77562).
+  # OPENROUTER_API_KEY supplies the credential.
+  model: openrouter/deepseek/deepseek-v4.1-flash-1017
   model-provider: openai
   env:
     OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -146,9 +146,14 @@ safe-outputs:
   # so the bare self-hosted label is enough.
   runs-on: self-hosted
   # Threat detection runs the AWF sandbox and needs Docker, so it targets the
-  # noble/amd64 fleet alongside the agent job.
+  # noble/amd64 fleet alongside the agent job. gh-aw's threat detection is
+  # hardcoded to the Copilot CLI, so detection must pin the copilot engine and
+  # its own Copilot-catalog model: without the pins the job inherits the
+  # agent's engine/model, which the external threat-detect binary rejects
+  # (github/gh-aw#78414), and the job fails without producing a result.
   threat-detection:
     engine: copilot
+    model: claude-haiku-5.5
     runs-on: [self-hosted, noble, amd64]
   create-pull-request:
     title-prefix: "build: "
@@ -156,6 +161,10 @@ safe-outputs:
     team-reviewers: [canonical/landscape]
     draft: false
     if-no-changes: ignore
+    # Push with a plain git push rather than the createCommitOnBranch GraphQL
+    # path: that path produces commits GitHub does not mark verified for this
+    # bot token, and pushSignedCommits then refuses to publish the branch.
+    signed-commits: false
     # Exactly one own-repo PR per run; docs edits go through the push handler.
     max: 1
     preserve-branch-name: true
@@ -172,8 +181,16 @@ safe-outputs:
     target-repo: canonical/landscape-documentation
     github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
     required-labels: [changelog, automation]
+    # Push with a plain git push rather than the createCommitOnBranch GraphQL
+    # path (same verified-commit refusal as create-pull-request above).
+    signed-commits: false
     # Docs PR updates may only touch release-notes pages (including index.md).
     allowed-files: ["docs/reference/release-notes/*.md"]
+    max: 1
+  # When a run finds no user-facing commits, the agent comments its
+  # classification table on the open changelog PR instead of stopping silently.
+  add-comment:
+    github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
     max: 1
 ---
 
@@ -185,7 +202,7 @@ You maintain the changelog for the landscape-task-handler charm. Your job is to 
 
 This charm has no versioned releases in the repository: charm releases are Charmhub revisions assigned at publish time, so changelog sections are dated, not versioned. There are no git tags to anchor against. The changelog lives at `CHANGELOG.md` in the repository root; this bot creates it on its first run that finds user-facing commits.
 
-1. The scan window is time-based: list the commits from the last four weeks with `git log --since="4 weeks ago" --no-merges --pretty=%H%x09%s`. `main` is squash-merged, so each merged PR is a single commit on this list. Do NOT anchor on the last commit that touched `CHANGELOG.md`: a bot changelog PR that is still open (or was merged late) makes that anchor unreliable, silently double-filing or skipping commits. Four weeks against a weekly schedule gives three weeks of overlap with the previous run, so omissions leapfrogged by later merges are still caught; the deduplication rules below prevent double-filing.
+1. The scan window is time-based: list the commits from the last four weeks with `git log --since="4 weeks ago" --no-merges --pretty=%H%x09%s`, run against the repository's default branch, not the ref this run was dispatched on: `git log --since="4 weeks ago" --no-merges --pretty=%H%x09%s origin/main`. Always use `origin/main` for the range — a `workflow_dispatch` run may check out a bot or feature branch whose own commits are automation churn, and those must never be classified as product changes. If `origin/main` is not present locally, use the checked-out HEAD and say so in the run output. `main` is squash-merged, so each merged PR is a single commit on this list. Do NOT anchor on the last commit that touched `CHANGELOG.md`: a bot changelog PR that is still open (or was merged late) makes that anchor unreliable, silently double-filing or skipping commits. Four weeks against a weekly schedule gives three weeks of overlap with the previous run, so omissions leapfrogged by later merges are still caught; the deduplication rules below prevent double-filing.
 2. Skip any commit whose subject has no trailing pull request reference ` (#1234)`. Such commits cannot carry the `(#<N>)` marker the deduplication relies on, so they can never be filed safely; if one looks user-facing, mention it in the PR body under `Changelog entries to review` instead of adding it to the changelog.
 3. Deduplicate the rest by pull request number. For each commit, extract its PR number `<N>` from the trailing ` (#1234)` reference in the subject. Match the FULL number wherever you search — `#123` must not match `#1234`. Skip the commit if EITHER of the following holds:
    a. Its own commit documented itself: run `git show --name-only --format= <commit>`; if `CHANGELOG.md` is among the paths, run `git show <commit> -- CHANGELOG.md` and check whether the diff adds a line containing the exact reference `#<N>`. A contributor who wrote their own changelog bullet counts as covered — do not add a second one.
@@ -193,18 +210,33 @@ This charm has no versioned releases in the repository: charm releases are Charm
 
 ## Select user-facing commits only
 
-Include only conventional commits that a charm user or Juju operator would notice. Commit subjects in this repo are usually conventional commits, but the type prefix is sometimes capitalized (e.g. `Fix:`) and occasionally missing entirely — match prefixes case-insensitively and use your judgment for non-conforming subjects.
+Do not decide from memory or by skimming. Work from the exact `git log` output you collected and classify every commit, one line at a time.
 
-- **Include**: `feat:`, `fix:`, `perf:`, and any breaking change (a `!` before the colon, e.g. `feat!:` / `fix!:`).
-- **Maybe Include**: `refactor: ` commits, only if they are user-facing.
-- **Exclude**: `chore:`, `ci:`, `test:`, `build:`, `docs:`, and `style:`, commits,
-  plus anything that only touches tooling, tests, or CI, and any dependency bumps.
+First, write out a classification table with one row per commit, in this exact format:
 
-Add each selected commit's subject line, including its type prefix and any `(LP: #NNNN)` Launchpad references, but excluding any `(scope)` after the type prefix. Proofread and correct any obvious spelling or grammar errors. Remove Jira issue references such as `LNDENG-5678` wherever they occur in the subject. KEEP the trailing GitHub pull request reference ` (#1234)`: it becomes the deduplication marker every changelog bullet must carry (see "Compose the new section"). Do **not** strip `(LP: #NNNN)` references.
+```
+| # | type | user-facing? | subject |
+|---|------|--------------|---------|
+| 1 | feat | yes | add hash-id component to snap |
+```
+
+Rules for the `user-facing?` column:
+
+- **yes**: `feat:`, `fix:`, `perf:`, and any breaking change (a `!` before the colon, e.g. `feat!:` / `fix!:`).
+- **maybe**: `refactor:` commits, only if they are user-facing.
+- **no**: `chore:`, `ci:`, `test:`, `build:`, `docs:`, and `style:` commits, plus anything that only touches tooling, tests, or CI, and any dependency bumps.
+
+Commit subjects in this repo are usually conventional commits, but the type prefix is sometimes capitalized (e.g. `Fix:`) and occasionally missing entirely — match prefixes case-insensitively and use your judgment for non-conforming subjects.
+
+After the table, write the count: `Included: N of M`. `N` is the number of rows marked `yes` (count a `maybe` as included only if you marked it yes). If the table has fewer rows than the number of lines in your `git log` output, you dropped commits — redo the table until every commit appears.
+
+**Only if `N` is 0** may you skip drafting a new changelog section and opening a pull request. In that case do not stay silent: find the open changelog pull request in this repository (label `changelog`) and post a comment on it containing the full classification table and the line `Included: 0 of M`, so a human can see exactly which commits were considered and why nothing was drafted. If no open changelog PR exists, report the table in your run summary instead.
+
+If `N` is 1 or more, you MUST continue and open a pull request. Never stop just because most commits are chores; a single `feat:` or `fix:` means proceed.
+
+Add each included commit's subject line, including its type prefix and any `(LP: #NNNN)` Launchpad references, but excluding any `(scope)` after the type prefix. Proofread and correct any obvious spelling or grammar errors. Remove Jira issue references such as `LNDENG-5678` wherever they occur in the subject. KEEP the trailing GitHub pull request reference ` (#1234)`: it becomes the deduplication marker every changelog bullet must carry (see "Compose the new section"). Do **not** strip `(LP: #NNNN)` references.
 
 Breaking changes are not always flagged in the subject. For every selected commit, also inspect the full commit message with `git show -s --format=%B <sha>` and look for `BREAKING CHANGE:` or `BREAKING-CHANGE:` footers. A commit carrying such a footer is a breaking change even when its subject has no `!` — classify it as breaking and note the breaking nature in the docs island bullet.
-
-If there are no user-facing commits, stop and make no changes.
 
 ## Sort the commits
 
@@ -257,7 +289,14 @@ Exclude flagged entries from the docs release-notes island. If a pull request is
 
 ## Open the pull request
 
-Open a pull request with the change. Use a title like `changelog update for <date>` (the `build: ` prefix is added automatically) and a body that lists the included commits, notes that only user-facing changes were selected, and includes the `Changelog entries to review` heading when any entries were flagged. If no new section was needed, do nothing — do not open an empty pull request.
+Before making any edit, create your working branch from the default branch, not from the ref this run was dispatched on: `git checkout -b <branch> origin/main`. The dispatch ref may be a bot or feature branch carrying automation commits; if you commit on top of it, the resulting PR contains all of those commits. The PR must contain ONLY the changelog commit on top of `origin/main`.
+
+First check for an existing open changelog pull request in this repository (label `changelog`). Exactly one should ever be open at a time.
+
+- If one is already open, do NOT open a second. Check whether its changelog section already covers the commits you selected (the listed subjects and their `(#<N>)` markers). If it does, make no changes and note that the existing PR is already current. If it is missing any of your selected commits, update that PR's branch with the corrected section rather than opening a new PR.
+- Only if no changelog PR is open, open one with the change. Use a title like `changelog update for <date>` (the `build: ` prefix is added automatically) and a body that lists the included commits, notes that only user-facing changes were selected, and includes the `Changelog entries to review` heading when any entries were flagged. If no new section was needed, do nothing — do not open an empty pull request.
+
+Never open a second changelog PR while one is open.
 
 ## Docs release notes (shared PR)
 
