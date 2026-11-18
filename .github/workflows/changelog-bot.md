@@ -7,133 +7,29 @@
 #     gh aw compile changelog-bot
 #
 # and commit the generated `.github/workflows/changelog-bot.lock.yml` alongside it.
+#
+# The shared plumbing (engine, runner setup, gh/node/compose installs, open bash
+# tool, Copilot-pinned threat detection, docs push handler) comes from the shared
+# component imported below. What stays here is only what differs for this repo:
+# the trigger, the runners, the changelog PR's allowed-files, and the prompt body.
 
 on:
   schedule: weekly on saturday around 12:00 UTC
   # Allow maintainers to trigger a run on demand.
   workflow_dispatch:
 
-# Run on the Canonical self-hosted fleet. The agent and threat-detection jobs
-# need Docker/AWF and so target the noble/amd64 fleet; the framework and
-# safe_outputs jobs use the bare self-hosted label.
-runs-on: [self-hosted, noble, amd64]
-runs-on-slim: self-hosted
-
-# The self-hosted runner image ships a gh too old for the agent job's AWF
-# install ('gh attestation verify' is missing), so install a modern,
-# checksum-verified gh CLI before the agent job's setup scripts run.
-pre-steps:
-  - name: Install modern gh CLI
-    run: |
-      GH_VERSION="2.83.1"
-      GH_SHA256="1c5252d4ce3db07b51c01ff0b909583da6364ff3fdc06d0c2e75e62dc0380a34"
-      tmp="$(mktemp -d)"
-      curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -o "$tmp/gh.tgz"
-      echo "${GH_SHA256}  $tmp/gh.tgz" | sha256sum -c -
-      tar -xzf "$tmp/gh.tgz" -C "$tmp"
-      install -m 0755 "$tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
-      rm -rf "$tmp"
-      gh version
-    env:
-      GH_TOKEN: ${{ github.token }}
-
-# The runner image also lacks the Docker Compose plugin, so the AWF sandbox's
-# 'docker compose up' fails with "unknown shorthand flag: 'd' in -d" and the
-# agent job exits 125. Install the compose plugin in the agent job before the
-# AWF bring-up (same fix as the DISA STIG evaluator's test-airgap.md).
-steps:
-  - name: Install Docker Compose plugin
-    run: |
-      if docker compose version >/dev/null 2>&1; then
-        echo "Docker Compose plugin already present, skipping install."
-        docker compose version
-        exit 0
-      fi
-      COMPOSE_VERSION="v5.5.0"
-      COMPOSE_SHA256="c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b"
-      mkdir -p ~/.docker/cli-plugins
-      curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
-        -o ~/.docker/cli-plugins/docker-compose
-      echo "${COMPOSE_SHA256}  ~/.docker/cli-plugins/docker-compose" | sha256sum -c -
-      chmod +x ~/.docker/cli-plugins/docker-compose
-      docker compose version
-
 permissions:
   contents: read
 
-# The runner image also ships a Node too old for gh-aw's runtime scripts
-# ('Cannot find module node:fs' during activation), so give the activation
-# job a modern Node.
-jobs:
-  activation:
-    pre-steps:
-      - name: Setup modern Node for gh-aw runtime
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-  # gh-aw's install_copilot_cli.sh uses --prefer-toolcache, which does not
-  # land the binary on PATH on this self-hosted runner image, so the
-  # threat-detection step exits 127. Install @github/copilot globally with
-  # npm in a detection pre-step so the binary resolves.
-  detection:
-    pre-steps:
-      - name: Install modern gh CLI
-        run: |
-          GH_VERSION="2.83.1"
-          GH_SHA256="1c5252d4ce3db07b51c01ff0b909583da6364ff3fdc06d0c2e75e62dc0380a34"
-          tmp="$(mktemp -d)"
-          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -o "$tmp/gh.tgz"
-          echo "${GH_SHA256}  $tmp/gh.tgz" | sha256sum -c -
-          tar -xzf "$tmp/gh.tgz" -C "$tmp"
-          install -m 0755 "$tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
-          rm -rf "$tmp"
-          gh version
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Install GitHub Copilot CLI
-        run: |
-          export NPM_CONFIG_PREFIX="$HOME/.npm-global"
-          mkdir -p "$NPM_CONFIG_PREFIX"
-          npm install -g @github/copilot@1.0.103
-          echo "$NPM_CONFIG_PREFIX/bin" >> "$GITHUB_PATH"
-          "$NPM_CONFIG_PREFIX/bin/copilot" --version
+# Run on the Canonical self-hosted fleet. The agent and threat-detection jobs
+# need Docker/AWF and so target the noble/amd64 fleet; the framework and
+# safe_outputs jobs use the bare self-hosted label. `runs-on`/`runs-on-slim`
+# cannot live in a shared component, so they are declared here.
+runs-on: [self-hosted, noble, amd64]
+runs-on-slim: self-hosted
 
-# The default checkout is shallow (fetch-depth 1) with no tags, which makes the
-# agent see only the latest commit. Fetch full history so it can scan the
-# commit window and read the commit log. A second checkout fetches the
-# documentation repo (all branches) for the shared docs release-notes PR (see
-# the "Docs release notes (shared PR)" section below).
-checkout:
-  - fetch-depth: 0
-  # canonical/landscape-documentation is public, so this checkout needs no
-  # token (and setting one would leak it onto the primary-repo checkout in the
-  # safe-output jobs). Pushing to the docs repo is handled by the credentialed
-  # safe_outputs job below (LANDSCAPE_CHANGELOG_TOKEN).
-  - repository: canonical/landscape-documentation
-    path: ./landscape-documentation
-    fetch: ["*"]
-
-engine:
-  id: pi
-  # Inference runs on OpenRouter via the pi engine. The vendored model id
-  # requires gh-aw v1.3.0+: earlier compilers reject the two-slash form under
-  # the model-identifier grammar (github/gh-aw#77514, fixed by #77562).
-  # OPENROUTER_API_KEY supplies the credential.
-  model: openrouter/deepseek/deepseek-v4.1-flash-1017
-  model-provider: openai
-  env:
-    OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    OPENAI_BASE_URL: https://openrouter.ai/api/v1
-
-network:
-  allowed: [defaults]
-
-# Shell access for inspecting history and formatting dates. The pi engine
-# cannot allowlist individual commands, so bash is open; the sandbox, network
-# allowlist, and safe-output handlers still confine the run.
-tools:
-  bash: ["*"]
-  edit:
+imports:
+  - canonical/landscape-internal-docs/.github/workflows/shared/changelog-bot-infra.md@c11434ac07328e440a933b1c5b763f6d850b594a
 
 # The agent never pushes directly; its file edits are turned into a pull request.
 # gh-aw binds the whole safe_outputs job to ONE credential for its git
@@ -143,20 +39,6 @@ tools:
 # repo and canonical/landscape-documentation, so it covers the own-repo
 # changelog PR and the cross-repo docs push with a single credential.
 safe-outputs:
-  github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
-  # The safe_outputs job runs the framework's output handlers, not the agent,
-  # so the bare self-hosted label is enough.
-  runs-on: self-hosted
-  # Threat detection runs the AWF sandbox and needs Docker, so it targets the
-  # noble/amd64 fleet alongside the agent job. gh-aw's threat detection is
-  # hardcoded to the Copilot CLI, so detection must pin the copilot engine and
-  # its own Copilot-catalog model: without the pins the job inherits the
-  # agent's engine/model, which the external threat-detect binary rejects
-  # (github/gh-aw#78414), and the job fails without producing a result.
-  threat-detection:
-    engine: copilot
-    model: claude-haiku-5.5
-    runs-on: [self-hosted, noble, amd64]
   create-pull-request:
     title-prefix: "build: "
     labels: [changelog, automation]
@@ -178,22 +60,6 @@ safe-outputs:
     # through the push-to-pull-request-branch handler below, never through
     # create-pull-request.
     allowed-files: ["CHANGELOG.md"]
-  push-to-pull-request-branch:
-    target: "*"
-    target-repo: canonical/landscape-documentation
-    github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
-    required-labels: [changelog, automation]
-    # Push with a plain git push rather than the createCommitOnBranch GraphQL
-    # path (same verified-commit refusal as create-pull-request above).
-    signed-commits: false
-    # Docs PR updates may only touch release-notes pages (including index.md).
-    allowed-files: ["docs/reference/release-notes/*.md"]
-    max: 1
-  # When a run finds no user-facing commits, the agent comments its
-  # classification table on the open changelog PR instead of stopping silently.
-  add-comment:
-    github-token: ${{ secrets.LANDSCAPE_CHANGELOG_TOKEN }}
-    max: 1
 ---
 
 # Weekly changelog update
