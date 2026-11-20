@@ -55,7 +55,6 @@ safe-outputs:
     signed-commits: false
     # Exactly one own-repo PR per run; docs edits go through the push handler.
     max: 1
-    preserve-branch-name: true
     recreate-ref: true
     # Own-repo PRs only ever edit CHANGELOG.md; the handler rejects any other
     # path outright. (gh-aw allowed-files filters by path only, not diff hunks,
@@ -64,6 +63,8 @@ safe-outputs:
     # through the push-to-pull-request-branch handler below, never through
     # create-pull-request.
     allowed-files: ["CHANGELOG.md"]
+  add-comment:
+    target: "*"
 ---
 
 # Weekly changelog update
