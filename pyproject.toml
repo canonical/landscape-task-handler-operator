@@ -34,7 +34,7 @@ integration = [
     "pytest",
 ]
 dev = [
-    "pytest>=8.4.1",
+    "pytest>=9.0.3",
     "tox>=4.47.0",
     "tox-uv>=1.33.1",
 ]
